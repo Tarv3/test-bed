@@ -1,0 +1,11 @@
+[package]
+name = "test-bed"
+version = "0.1.0"
+authors = ["Joshua Chesser <a1748908@adelaide.edu.au>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { version="1", features=["derive"]}
+serde_json = "1"
