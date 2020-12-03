@@ -1,17 +1,76 @@
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap, error::Error, fs::File, fs::OpenOptions, io, io::BufWriter, io::Read,
-    io::Write, path::Path, path::PathBuf, process::Child, process::Command, process::ExitStatus,
-    process::Stdio, time::Duration,
+use nom::{
+    bytes::complete::is_a,
+    bytes::complete::is_not,
+    bytes::complete::tag,
+    character::complete,
+    character::complete::digit1,
+    combinator::{eof, map_res},
+    sequence::delimited,
+    Parser,
 };
+use serde::{Deserialize, Serialize};
+// use std::path::PathBuf;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum Arg {
     String(String),
     Param { index: usize, param: String },
+    Pid(usize),
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+fn arg(mut input: &str) -> nom::IResult<&str, Arg> {
+    input = input.trim();
+    let value: nom::IResult<&str, &str> =
+        delimited(complete::char('['), is_not("]"), complete::char(']'))(input);
+
+    if let Ok((input, inner)) = value {
+        eof(input)?;
+        let (rem, index) = map_res(digit1, str::parse)(inner)?;
+        let (rem, _) = tag("::")(rem)?;
+        let (rem, param) = is_not(" ")(rem)?;
+        eof(rem)?;
+
+        return Ok((
+            rem,
+            Arg::Param {
+                index,
+                param: param.to_string(),
+            },
+        ));
+    }
+
+    let value: nom::IResult<&str, &str> =
+        delimited(tag("pid("), is_not(")"), complete::char(')'))(input);
+
+    if let Ok((input, inner)) = value {
+        eof(input)?;
+        let (rem, index) = map_res(digit1, str::parse)(inner)?;
+        eof(rem)?;
+
+        return Ok((
+            rem,
+            Arg::Pid(index)
+        ));
+    }
+
+    let (rem, arg) = is_not(" ")(input)?;
+    Ok((rem, Arg::String(arg.to_string())))
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum OutputMap {
+    Print,
+    Create(Arg),
+    Append(Arg),
+}
+
+impl Default for OutputMap {
+    fn default() -> Self {
+        Self::Print
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum TestCommand {
     Kill(usize),
     Spawn {
@@ -30,392 +89,297 @@ pub enum TestCommand {
     },
 }
 
-#[derive(Copy, Clone)]
-pub struct TimeoutLoop {
-    duration: u64,
-    sleep: u64,
+fn kill(i: &str) -> nom::IResult<&str, TestCommand> {
+    let i = i.trim();
+
+    let (i, _) = tag("kill").or(tag("KILL")).parse(i)?;
+    let (i, _) = is_a(" ")(i)?;
+    let (i, id) = map_res(digit1, str::parse)(i)?;
+
+    eof(i)?;
+
+    Ok((i, TestCommand::Kill(id)))
 }
 
-impl TimeoutLoop {
-    pub fn new(duration: u64, sleep: u64) -> Self {
-        Self { duration, sleep }
-    }
+fn sleep(i: &str) -> nom::IResult<&str, TestCommand> {
+    let i = i.trim();
 
-    // Creates a new timeoutloop that will sleep at most 'n' times
-    pub fn from_sleep_times(duration: u64, n: u64) -> Self {
-        assert!(n > 0);
+    let (i, _) = tag("sleep").or(tag("SLEEP")).parse(i)?;
+    let (i, _) = is_a(" ")(i)?;
+    let (i, ms) = map_res(digit1, str::parse)(i)?;
+    eof(i)?;
 
-        let mut sleep = duration / n;
-
-        if duration % n != 0 {
-            sleep += 1;
-        }
-
-        Self { duration, sleep }
-    }
-
-    pub fn wait_loop(&self, mut f: impl FnMut() -> bool) {
-        assert!(self.sleep > 0);
-
-        let duration = Duration::from_millis(self.sleep);
-        let mut current = 0;
-
-        while current < self.duration {
-            // NOTE: If f takes a significant amount of time this will not be remotely accurate
-            if f() {
-                break;
-            }
-
-            current += self.sleep;
-            std::thread::sleep(duration);
-        }
-    }
+    Ok((i, TestCommand::Sleep(ms)))
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum OutputMap {
-    Print,
-    Create(PathBuf),
-    Append(PathBuf),
+fn wait_duration(i: &str) -> nom::IResult<&str, (u64, u64)> {
+    let (i, _) = is_a(" ")(i)?;
+    let (i, ms) = map_res(digit1, str::parse)(i)?;
+    let (i, _) = is_a(" ")(i)?;
+    let (i, sleeps) = map_res(digit1, str::parse)(i)?;
+
+    Ok((i, (ms, sleeps)))
 }
 
-impl Default for OutputMap {
-    fn default() -> Self {
-        Self::Print
+fn wait_for(i: &str) -> nom::IResult<&str, TestCommand> {
+    let i = i.trim();
+
+    let (i, _) = tag("wait").or(tag("WAIT")).parse(i)?;
+    let (i, _) = is_a(" ")(i)?;
+    let (mut i, id) = map_res(digit1, str::parse)(i)?;
+
+    let mut timeout = None;
+
+    if let Ok((rem, wait)) = wait_duration(i) {
+        i = rem;
+        timeout = Some(wait);
     }
+
+    eof(i)?;
+
+    Ok((i, TestCommand::WaitFor { id, timeout }))
 }
 
-pub enum ProcessStopped {
-    Exited(ExitStatus),
-    Killed,
+fn output_map(i: &str) -> nom::IResult<&str, OutputMap> {
+    let print: nom::IResult<&str, &str> = tag("print")(i);
+
+    if let Ok((i, _)) = print {
+        return Ok((i, OutputMap::Print));
+    }
+
+    let append: nom::IResult<&str, &str> =
+        delimited(tag("append("), is_not(")"), complete::char(')'))(i);
+
+    if let Ok((i, inner)) = append {
+        return Ok((i, OutputMap::Append(arg(inner)?.1)));
+    }
+
+    let (i, file) = is_not(" ")(i)?;
+    Ok((i, OutputMap::Create(arg(file)?.1)))
 }
 
-pub struct Running {
-    process: Option<Child>,
-    stdout: OutputMap,
-    stderr: OutputMap,
+fn stdout(i: &str) -> nom::IResult<&str, OutputMap> {
+    let (i, _) = tag("--stdout=")(i)?;
+
+    output_map(i)
 }
 
-impl Running {
-    pub fn new(cmd: &str, args: &[&str], stdout: OutputMap, stderr: OutputMap) -> io::Result<Self> {
-        let process = Command::new(cmd)
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+fn stderr(i: &str) -> nom::IResult<&str, OutputMap> {
+    let (i, _) = tag("--stderr=")(i)?;
 
-        Ok(Self {
-            process: Some(process),
-            stdout,
-            stderr,
-        })
-    }
-
-    pub fn kill(&mut self) -> io::Result<()> {
-        if let Some(mut value) = self.process.take() {
-            value.kill()?;
-        }
-
-        Ok(())
-    }
-
-    pub fn handle_output(&self, stdout: &[u8], stderr: &[u8]) -> Result<(), Box<dyn Error>> {
-        let print_out = |data: &[u8]| -> io::Result<()> {
-            if data.len() == 0 {
-                return Ok(());
-            }
-
-            println!("-----------StdOut-----------");
-            std::io::stderr().write_all(data)?;
-            println!("----------------------------");
-
-            Ok(())
-        };
-
-        let print_err = |data: &[u8]| -> io::Result<()> {
-            if data.len() == 0 {
-                return Ok(());
-            }
-
-            println!("-----------StdErr-----------");
-            std::io::stderr().write_all(data)?;
-            println!("----------------------------");
-
-            Ok(())
-        };
-
-        let create_parent = |path: &Path| -> io::Result<()> {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            Ok(())
-        };
-
-        match &self.stdout {
-            OutputMap::Print => print_out(stdout)?,
-            OutputMap::Create(file) => {
-                create_parent(file.as_path())?;
-                let file = File::create(file)?;
-                let mut writer = BufWriter::new(file);
-
-                writer.write_all(stdout)?;
-                writer.flush()?;
-            }
-            OutputMap::Append(file) => {
-                create_parent(file.as_path())?;
-                let file = OpenOptions::new().append(true).create(true).open(file)?;
-                let mut writer = BufWriter::new(file);
-
-                writer.write_all(stdout)?;
-                writer.flush()?;
-            }
-        }
-
-        match &self.stderr {
-            OutputMap::Print => print_err(stderr)?,
-            OutputMap::Create(file) => {
-                create_parent(file.as_path())?;
-                let file = File::create(file)?;
-                let mut writer = BufWriter::new(file);
-
-                writer.write_all(stderr)?;
-                writer.flush()?;
-            }
-            OutputMap::Append(file) => {
-                create_parent(file.as_path())?;
-                let file = OpenOptions::new().append(true).create(true).open(file)?;
-                let mut writer = BufWriter::new(file);
-
-                writer.write_all(stderr)?;
-                writer.flush()?;
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn wait_or_terminate(
-        mut self,
-        timeout: Option<TimeoutLoop>,
-    ) -> Result<ProcessStopped, Box<dyn Error>> {
-        let mut process = match self.process.take() {
-            Some(process) => process,
-            None => panic!("Tried to take missing child process"),
-        };
-
-        let timeout = match timeout {
-            Some(timeout) => timeout,
-            None => {
-                let output = process.wait_with_output()?;
-                self.handle_output(&output.stdout, &output.stderr)?;
-                return Ok(ProcessStopped::Exited(output.status));
-            }
-        };
-
-        let mut exit_status = None;
-        let mut error = None;
-
-        timeout.wait_loop(|| match process.try_wait() {
-            Ok(Some(status)) => {
-                exit_status = Some(status);
-                true
-            }
-            Ok(_) => false,
-            Err(e) => {
-                error = Some(e);
-                true
-            }
-        });
-
-        if let Some(err) = error {
-            return Err(Box::new(err));
-        }
-
-        if exit_status.is_none() {
-            process.kill()?;
-            return Ok(ProcessStopped::Killed);
-        }
-
-        let mut stdout = vec![];
-        let mut stderr = vec![];
-
-        if let Some(mut out) = process.stdout.take() {
-            out.read_to_end(&mut stdout)?;
-        }
-
-        if let Some(mut err) = process.stderr.take() {
-            err.read_to_end(&mut stderr)?;
-        }
-
-        self.handle_output(&stdout, &stderr)?;
-
-        Ok(ProcessStopped::Exited(exit_status.unwrap()))
-    }
+    output_map(i)
 }
 
-pub struct TestBed {
-    map: HashMap<usize, Running>,
-    current_indices: Vec<usize>,
-    max_indices: Vec<usize>,
-    params: HashMap<String, Vec<String>>,
+fn spawn(i: &str) -> nom::IResult<&str, TestCommand> {
+    let i = i.trim();
+
+    let (i, _) = tag("spawn").or(tag("SPAWN")).parse(i)?;
+    let (i, _) = is_a(" ")(i)?;
+    let (mut i, id) = map_res(digit1, str::parse)(i)?;
+    let mut out = OutputMap::Print;
+    let mut err = OutputMap::Print;
+
+    loop {
+        let (rem, _) = is_a(" ")(i)?;
+        if let Ok((rem, output)) = stdout(rem) {
+            out = output;
+            i = rem;
+            continue;
+        }
+
+        if let Ok((rem, output)) = stderr(rem) {
+            err = output;
+            i = rem;
+            continue;
+        }
+
+        i = rem;
+        break;
+    }
+
+    let (i, command) = is_not(" ")(i)?;
+    let split = i.split_whitespace();
+    let mut args = vec![];
+
+    for value in split {
+        let arg = arg(value)?;
+        args.push(arg.1);
+    }
+
+    Ok((
+        "",
+        TestCommand::Spawn {
+            id,
+            command: command.into(),
+            args,
+            stdout: out,
+            stderr: err,
+        },
+    ))
 }
 
-impl TestBed {
-    pub fn new(max_indices: Vec<usize>, params: HashMap<String, Vec<String>>) -> Self {
-        let current_indices = max_indices.iter().map(|_| 0).collect::<Vec<_>>();
-
-        Self {
-            map: HashMap::new(),
-            current_indices,
-            max_indices,
-            params,
-        }
+pub fn test_command(i: &str) -> nom::IResult<&str, TestCommand> {
+    if let Ok(res) = kill(i) {
+        return Ok(res);
     }
 
-    pub fn shutdown(&mut self) {
-        for (id, mut proc) in self.map.drain() {
-            match proc.kill() {
-                Ok(_) => println!("Killed: {}", id),
-                Err(e) => println!("Failed to Kill {}: {}", id, e),
-            }
-        }
+    if let Ok(res) = sleep(i) {
+        return Ok(res);
     }
 
-    pub fn kill(&mut self, id: usize) -> io::Result<()> {
-        println!("Killing {}", id);
-
-        match self.map.remove(&id) {
-            Some(mut value) => value.kill(),
-            None => Ok(()),
-        }
+    if let Ok(res) = wait_for(i) {
+        return Ok(res);
     }
 
-    pub fn spawn(
-        &mut self,
-        id: usize,
-        cmd: &str,
-        args: &[Arg],
-        stdout: OutputMap,
-        stderr: OutputMap,
-    ) -> io::Result<()> {
-        println!("Spawning {}", id);
+    spawn(i)
+}
 
-        let args = args
-            .iter()
-            .map(|arg| match arg {
-                Arg::String(value) => value.as_str(),
-                Arg::Param { index, param } => {
-                    let current = self.current_indices.get(*index).cloned().unwrap_or(0);
-                    self.params
-                        .get(param)
-                        .map(|values| values.get(current))
-                        .flatten()
-                        .map(|value| value.as_str())
-                        .unwrap_or("")
+#[cfg(test)]
+mod parse_test {
+    use super::{arg, test_command, Arg, OutputMap, TestCommand};
+
+    #[test]
+    fn arg_parse() {
+        let a = "wow_hello";
+        let b = "[1::amazing]";
+        let c = "  [1::amazing] ";
+        let d = "  pid(0) ";
+
+        let res = arg(a);
+        println!("{:?}", res);
+        assert!(res == Ok(("", Arg::String("wow_hello".to_string()))));
+
+        let res = arg(b);
+        println!("{:?}", res);
+        assert!(
+            res == Ok((
+                "",
+                Arg::Param {
+                    index: 1,
+                    param: "amazing".to_string()
                 }
-            })
-            .collect::<Vec<_>>();
-        let running = Running::new(cmd, &args, stdout, stderr)?;
+            ))
+        );
 
-        let previous = self.map.insert(id, running);
+        let res = arg(c);
+        println!("{:?}", res);
+        assert!(
+            res == Ok((
+                "",
+                Arg::Param {
+                    index: 1,
+                    param: "amazing".to_string()
+                }
+            ))
+        );
 
-        if let Some(mut proc) = previous {
-            println!("WARN: Process {} overwritten", id);
-
-            proc.kill()?;
-        }
-
-        Ok(())
+        let res = arg(d);
+        println!("{:?}", res);
+        assert!(
+            res == Ok((
+                "",
+                Arg::Pid(0)
+            ))
+        );
     }
 
-    pub fn wait_or_terminate(
-        &mut self,
-        id: usize,
-        timeout: Option<(u64, u64)>,
-    ) -> Result<(), Box<dyn Error>> {
-        println!("Waiting for: {}", id);
+    #[test]
+    fn command_test() {
+        let spawn = "spawn 1 --stdout=append(idontknow.txt) --stderr=something ./something -f hello amazing [1::another]";
+        let res = test_command(spawn);
+        println!("{:?}", res);
 
-        let proc = match self.map.remove(&id) {
-            Some(proc) => proc,
-            None => return Ok(()),
-        };
-
-        let timeout = timeout
-            .map(|(duration, sleep_times)| TimeoutLoop::from_sleep_times(duration, sleep_times));
-
-        match proc.wait_or_terminate(timeout)? {
-            ProcessStopped::Exited(status) => {
-                println!("Process {}, Exit Success: {}", id, status.success())
-            }
-            ProcessStopped::Killed => println!("WARN: Process {} Kill due to wait timeout", id),
-        }
-
-        Ok(())
-    }
-
-    fn sleep(ms: u64) {
-        println!("Sleeping: {}", ms);
-        std::thread::sleep(Duration::from_millis(ms));
-    }
-
-    pub fn run_commands(&mut self, commands: &[TestCommand]) -> Result<(), Box<dyn Error>> {
-        for command in commands.iter() {
-            match command {
-                TestCommand::Kill(id) => self.kill(*id)?,
+        assert!(
+            res == Ok((
+                "",
                 TestCommand::Spawn {
-                    id,
-                    command,
-                    args,
-                    stdout,
-                    stderr,
-                } => {
-                    self.spawn(*id, &command, &args[..], stdout.clone(), stderr.clone())?;
+                    id: 1,
+                    command: "./something".into(),
+                    args: vec![
+                        Arg::String("-f".into()),
+                        Arg::String("hello".into()),
+                        Arg::String("amazing".into()),
+                        Arg::Param {
+                            index: 1,
+                            param: "another".into()
+                        }
+                    ],
+                    stdout: OutputMap::Append(Arg::String("idontknow.txt".into())),
+                    stderr: OutputMap::Create(Arg::String("something".into()))
                 }
-                TestCommand::Sleep(ms) => TestBed::sleep(*ms),
-                TestCommand::WaitFor { id, timeout } => self.wait_or_terminate(*id, *timeout)?,
-            }
-        }
+            ))
+        );
 
-        Ok(())
-    }
+        let spawn = "SPAWN 12 --stdout=append([1::files]) --stderr=append(something) ./something -f hello amazing [1::another] [200::whoknows]";
+        let res = test_command(spawn);
+        println!("{:?}", res);
 
-    pub fn increment_indices(&mut self) -> bool {
-        if self.current_indices.len() == 0 {
-            return false;
-        }
+        assert!(
+            res == Ok((
+                "",
+                TestCommand::Spawn {
+                    id: 12,
+                    command: "./something".into(),
+                    args: vec![
+                        Arg::String("-f".into()),
+                        Arg::String("hello".into()),
+                        Arg::String("amazing".into()),
+                        Arg::Param {
+                            index: 1,
+                            param: "another".into()
+                        },
+                        Arg::Param {
+                            index: 200,
+                            param: "whoknows".into()
+                        },
+                    ],
+                    stdout: OutputMap::Append(Arg::Param {
+                        index: 1,
+                        param: "files".into()
+                    }),
+                    stderr: OutputMap::Append(Arg::String("something".into()))
+                }
+            ))
+        );
 
-        let len = self.current_indices.len();
+        let kill = "kill 12";
+        let res = test_command(kill);
+        println!("{:?}", res);
 
-        for i in 0..len {
-            let current = &mut self.current_indices[i];
-            let max = self.max_indices[i];
-            *current += 1;
+        assert!(res == Ok(("", TestCommand::Kill(12))));
 
-            if *current < max {
-                break; 
-            }
+        let sleep = "sleep 12";
+        let res = test_command(sleep);
+        println!("{:?}", res);
 
-            if i < len - 1 {
-                *current = 0;
-                self.current_indices[i + 1] += 1;
-            }
-        }
+        assert!(res == Ok(("", TestCommand::Sleep(12))));
 
-        let last = &mut self.current_indices.last().unwrap();
-        let last_max = &mut self.max_indices.last().unwrap();
+        let wait = "wait 12 10000 100";
+        let res = test_command(wait);
+        println!("{:?}", res);
 
-        last < last_max
-    }
+        assert!(
+            res == Ok((
+                "",
+                TestCommand::WaitFor {
+                    id: 12,
+                    timeout: Some((10000, 100))
+                }
+            ))
+        );
 
-    pub fn run_all(&mut self, commands: &[TestCommand]) -> Result<(), Box<dyn Error>> {
-        self.run_commands(commands)?;
+        let wait = "wait 12";
+        let res = test_command(wait);
+        println!("{:?}", res);
 
-        while self.increment_indices() {
-            self.run_commands(commands)?;
-            self.shutdown();
-        }
-
-        Ok(())
+        assert!(
+            res == Ok((
+                "",
+                TestCommand::WaitFor {
+                    id: 12,
+                    timeout: None
+                }
+            ))
+        );
     }
 }

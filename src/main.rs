@@ -1,12 +1,14 @@
 use std::{fs::File, io::BufReader, collections::HashMap};
-use commands::{TestBed, TestCommand};
+use commands::test_command;
+use bed::TestBed;
 use serde::Deserialize;
 
 mod commands;
+mod bed;
 
 #[derive(Clone, Deserialize)]
 struct Config {
-    commands: Vec<TestCommand>,
+    commands: Vec<String>,
     indices: Vec<usize>,
     params: HashMap<String, Vec<String>>
 }
@@ -20,6 +22,7 @@ fn main() {
     let reader = BufReader::new(file);
 
     let Config { commands, indices, params } = serde_json::from_reader(reader).unwrap();
+    let commands = commands.iter().map(|value| test_command(value).unwrap().1).collect::<Vec<_>>();
     let mut test_bed = TestBed::new(indices, params);
 
     match test_bed.run_all(&commands) {
