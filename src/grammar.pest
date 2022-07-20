@@ -9,14 +9,14 @@ parameters = {
 parameter = {
     ident
     ~
-    ":"
+    "="
     ~
     param_array
 }
 
 param_array = {
     ("[" ~ "]") | 
-    ("[" ~ string ~ ("," ~ string)* ~ (",")* ~ "]")
+    ("[" ~ string ~ ("," ~ string)* ~ (",")? ~ "]")
 }
 
 commands = {
