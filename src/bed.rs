@@ -384,7 +384,7 @@ impl TestBed {
         let timeout = timeout
             .map(|(duration, sleep_times)| TimeoutLoop::from_sleep_times(duration, sleep_times));
 
-        match proc.wait_or_terminate(timeout, &self.stack, &self.params)? {
+        match proc.wait_or_terminate(timeout, &id.loop_idx, &self.params)? {
             ProcessStopped::Exited(status) => {
                 println!("Process {:?}, Exit Success: {}", id, status.success())
             }
@@ -399,7 +399,7 @@ impl TestBed {
             .map(|(duration, sleep_times)| TimeoutLoop::from_sleep_times(duration, sleep_times));
 
         for (id, proc) in self.map.drain() {
-            match proc.wait_or_terminate(timeout, &self.stack, &self.params)? {
+            match proc.wait_or_terminate(timeout, &id.loop_idx, &self.params)? {
                 ProcessStopped::Exited(status) => {
                     println!("Process {:?}, Exit Success: {}", id, status.success())
                 }
