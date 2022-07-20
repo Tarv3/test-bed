@@ -46,7 +46,7 @@ for_loop = {
 }
 
 command = {
-    (kill | spawn | sleep | wait_for) ~ ";"
+    (kill | spawn | sleep | wait_for | wait_all) ~ ";"
 }
 
 kill = {
@@ -135,6 +135,10 @@ sleep = {
 
 wait_for = {
     "wait_for" ~ integer ~ (integer ~ integer)?
+}
+
+wait_all = {
+    "wait_all" ~ (integer ~ integer)?
 }
 
 string = ${ "\"" ~ inner ~ "\"" }

@@ -394,6 +394,24 @@ impl TestBed {
         Ok(())
     }
 
+    pub fn wait_all(&mut self, timeout: Option<(u64, u64)>) -> Result<(), Box<dyn Error>> {
+        let timeout = timeout
+            .map(|(duration, sleep_times)| TimeoutLoop::from_sleep_times(duration, sleep_times));
+
+        for (id, proc) in self.map.drain() {
+            match proc.wait_or_terminate(timeout, &self.stack, &self.params)? {
+                ProcessStopped::Exited(status) => {
+                    println!("Process {:?}, Exit Success: {}", id, status.success())
+                }
+                ProcessStopped::Killed => {
+                    println!("WARN: Process {:?} Kill due to wait timeout", id)
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn sleep(ms: u64) {
         println!("Sleeping: {}", ms);
         std::thread::sleep(Duration::from_millis(ms));
@@ -410,6 +428,7 @@ impl TestBed {
             }
             TestCommand::Sleep(ms) => TestBed::sleep(*ms),
             TestCommand::WaitFor { id, timeout } => self.wait_or_terminate(*id, *timeout)?,
+            TestCommand::WaitAll(timeout) => self.wait_all(*timeout)?,
         }
 
         Ok(())

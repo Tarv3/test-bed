@@ -136,6 +136,18 @@ fn parse_wait_for(pair: Pair<Rule>) -> TestCommand {
     TestCommand::WaitFor { id, timeout }
 }
 
+fn parse_wait_all(pair: Pair<Rule>) -> TestCommand {
+    let mut inner = pair.into_inner();
+    let mut timeout = None;
+
+    if let Some(ms) = inner.next() {
+        let retries = inner.next().unwrap();
+
+        timeout = Some((ms.as_str().parse().unwrap(), retries.as_str().parse().unwrap()))
+    }
+    TestCommand::WaitAll(timeout)
+}
+
 fn parse_spawn(pair: Pair<Rule>) -> TestCommand {
     let mut inner = pair.into_inner();
     let id = inner.next().unwrap().as_str().parse().unwrap();
@@ -180,6 +192,7 @@ pub enum TestCommand {
     Spawn { id: usize, command: String, args: Vec<Arg>, stdout: OutputMap, stderr: OutputMap },
     Sleep(u64),
     WaitFor { id: usize, timeout: Option<(u64, u64)> },
+    WaitAll(Option<(u64, u64)>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -214,7 +227,7 @@ impl Arg {
                 }
                 Rule::pid => {
                     let inner = value.into_inner();
-                    let id = inner.as_str().parse().unwrap(); 
+                    let id = inner.as_str().parse().unwrap();
 
                     return Arg::Pid(id);
                 }
