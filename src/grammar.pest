@@ -1,0 +1,158 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+parameters = {
+    "[params]"
+    ~
+    parameter*
+}
+
+parameter = {
+    ident
+    ~
+    ":"
+    ~
+    param_array
+}
+
+param_array = {
+    ("[" ~ "]") | 
+    ("[" ~ string ~ ("," ~ string)* ~ (",")* ~ "]")
+}
+
+commands = {
+    "[commands]"
+    ~
+    (expr)*
+}
+
+expr = {
+    command | for_loop
+}
+
+for_loop = {
+    "for"
+    ~
+    ident
+    ~
+    "in"
+    ~
+    ident
+    ~
+    "{"
+    ~
+    (expr)*
+    ~
+    "}"
+}
+
+command = {
+    (kill | spawn | sleep | wait_for) ~ ";"
+}
+
+kill = {
+    "kill" ~ integer
+}
+
+spawn = {
+    "spawn"
+    ~
+    integer
+    ~
+    stdout_map?
+    ~
+    stderr_map?
+    ~
+    program
+    ~
+    (arg)*
+}
+
+program = { inner }
+
+arg = ${
+    pid | 
+    prefix ~ template ~ suffix |
+    prefix ~ template |
+    template ~ suffix |
+    template |
+    prefix
+}
+
+pid = ${ "pid(" ~ integer ~ ")" }
+
+prefix = @{ prefix_char+ }
+
+prefix_char = {
+    !(WHITESPACE | "[" | ";" | ")") ~ ANY
+}
+
+suffix = @{ suffix_char+ }
+
+suffix_char = {
+    !(WHITESPACE | ";" | ")") ~ ANY
+}
+
+
+template = {
+    "["
+    ~
+    ident
+    ~
+    "::"
+    ~
+    ident
+    ~
+    "]"
+}
+
+stderr_map = ${
+    "--stderr="
+    ~
+    output_map
+}
+
+stdout_map = ${
+    "--stdout="
+    ~
+    output_map
+}
+
+output_map = ${
+    append |
+    print |
+    arg
+}
+
+append = ${
+    "append(" ~ arg ~ ")"
+}
+
+print = { "print" }
+
+sleep = {
+    "sleep" ~ integer
+}
+
+wait_for = {
+    "wait_for" ~ integer ~ (integer ~ integer)?
+}
+
+string = ${ "\"" ~ inner ~ "\"" }
+inner = @{ char* }
+char = {
+    !("\"" | WHITESPACE) ~ ANY
+}
+
+ident = @{ letter ~ (letter | ('0'..'9'))* }
+letter = { ('a'..'z') | ('A'..'Z') }
+integer = @{ ('0'..'9')+ } 
+
+test_bed = _{ 
+    SOI 
+    ~  
+    (parameters)?
+    ~
+    (commands)
+    ~ 
+    EOI 
+}
