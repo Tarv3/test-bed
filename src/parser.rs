@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::mpsc::{channel, Sender},
-};
+use std::collections::HashMap;
 
 use pest::{iterators::Pair, Parser};
 
@@ -11,7 +8,7 @@ use crate::bed::{Instruction, TestBed};
 #[grammar = "grammar.pest"]
 pub struct TestBedParser;
 
-pub fn parse_test_bed(file: &str) -> (TestBed, Sender<()>) {
+pub fn parse_test_bed(file: &str) -> TestBed {
     let ast = TestBedParser::parse(Rule::test_bed, &file).unwrap();
     let mut params = HashMap::new();
     let mut instructions = vec![];
@@ -31,9 +28,8 @@ pub fn parse_test_bed(file: &str) -> (TestBed, Sender<()>) {
         }
     }
 
-    let (send, recv) = channel();
-    let test_bed = TestBed::new(params, instructions, recv);
-    (test_bed, send)
+    let test_bed = TestBed::new(params, instructions);
+    test_bed
 }
 
 fn parse_parameters(pair: Pair<Rule>) -> Result<HashMap<String, Vec<String>>, String> {

@@ -13,11 +13,12 @@ fn main() {
 
     let commands = args.next().unwrap();
     let file = fs::read_to_string(commands).unwrap();
-    let (mut test_bed, send) = parse_test_bed(&file);
+    let mut test_bed = parse_test_bed(&file);
+    let shutdown = test_bed.shutdown_signal.clone();
 
     ctrlc::set_handler(move || {
         println!("Forcefully shutting down");
-        send.send(()).unwrap();
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
     })
     .unwrap();
 

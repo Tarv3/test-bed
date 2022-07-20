@@ -12,7 +12,10 @@ use std::{
     process::Command,
     process::ExitStatus,
     process::Stdio,
-    sync::mpsc::{Receiver, TryRecvError},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -206,7 +209,7 @@ impl Running {
         timeout: Option<TimeoutLoop>,
         stack: &Stack,
         params: &HashMap<String, Vec<String>>,
-        recv: &Receiver<()>,
+        shutdown: &Arc<AtomicBool>,
     ) -> Result<ProcessStopped, Box<dyn Error>> {
         let mut process = match self.process.take() {
             Some(process) => process,
@@ -222,12 +225,8 @@ impl Running {
         let mut error = None;
 
         timeout.wait_loop(|| {
-            match recv.try_recv() {
-                Ok(_) | Err(TryRecvError::Disconnected) => {
-                    error = Some(Box::new(TryRecvError::Disconnected) as Box<dyn Error>);
-                    return true;
-                }
-                _ => {}
+            if shutdown.load(Ordering::Relaxed) {
+                return true;
             }
 
             match process.try_wait() {
@@ -243,13 +242,18 @@ impl Running {
             }
         });
 
-        if let Some(err) = error {
-            return Err(err);
-        }
-
         if exit_status.is_none() {
-            process.kill()?;
-            return Ok(ProcessStopped::Killed);
+            match process.kill() {
+                Ok(_) => {}
+                Err(err) => {
+                    println!("Failed to kill process: {err}");
+                }
+            }
+
+            match error {
+                Some(err) => return Err(err),
+                None => return Ok(ProcessStopped::Killed),
+            }
         }
 
         let mut stdout = vec![];
@@ -308,7 +312,7 @@ pub struct TestBed {
     stack: Stack,
     instructions: Vec<Instruction>,
     instruction_idx: usize,
-    shutdown_signal: Receiver<()>,
+    pub shutdown_signal: Arc<AtomicBool>,
 }
 
 impl Drop for TestBed {
@@ -318,11 +322,7 @@ impl Drop for TestBed {
 }
 
 impl TestBed {
-    pub fn new(
-        params: HashMap<String, Vec<String>>,
-        instructions: Vec<Instruction>,
-        shutdown_signal: Receiver<()>,
-    ) -> Self {
+    pub fn new(params: HashMap<String, Vec<String>>, instructions: Vec<Instruction>) -> Self {
         Self {
             map: HashMap::new(),
             params,
@@ -330,7 +330,7 @@ impl TestBed {
             loop_points: vec![],
             instructions,
             instruction_idx: 0,
-            shutdown_signal,
+            shutdown_signal: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -523,9 +523,8 @@ impl TestBed {
 
     pub fn run(&mut self) {
         loop {
-            match self.shutdown_signal.try_recv() {
-                Ok(_) | Err(TryRecvError::Disconnected) => break,
-                _ => {}
+            if self.shutdown_signal.load(Ordering::Relaxed) {
+                break;
             }
 
             match self.next() {
