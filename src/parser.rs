@@ -104,6 +104,7 @@ fn parse_command(pair: Pair<Rule>, instructions: &mut Vec<Instruction>) {
         Rule::kill => instructions.push(Instruction::Command(parse_kill(inner))),
         Rule::sleep => instructions.push(Instruction::Command(parse_sleep(inner))),
         Rule::wait_for => instructions.push(Instruction::Command(parse_wait_for(inner))),
+        Rule::wait_all => instructions.push(Instruction::Command(parse_wait_all(inner))),
         Rule::spawn => instructions.push(Instruction::Command(parse_spawn(inner))),
         _ => unreachable!("{}", inner),
     }
