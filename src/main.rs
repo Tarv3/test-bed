@@ -13,6 +13,13 @@ fn main() {
 
     let commands = args.next().unwrap();
     let file = fs::read_to_string(commands).unwrap();
-    let mut test_bed = parse_test_bed(&file);
-    test_bed.run()
+    let (mut test_bed, send) = parse_test_bed(&file);
+
+    ctrlc::set_handler(move || {
+        println!("Forcefully shutting down");
+        send.send(()).unwrap();
+    })
+    .unwrap();
+
+    test_bed.run();
 }

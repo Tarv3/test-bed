@@ -1,6 +1,18 @@
 use std::{
-    collections::HashMap, error::Error, fs::File, fs::OpenOptions, io, io::BufWriter, io::Read,
-    io::Write, path::Path, process::Child, process::Command, process::ExitStatus, process::Stdio,
+    collections::HashMap,
+    error::Error,
+    fs::File,
+    fs::OpenOptions,
+    io,
+    io::BufWriter,
+    io::Read,
+    io::Write,
+    path::Path,
+    process::Child,
+    process::Command,
+    process::ExitStatus,
+    process::Stdio,
+    sync::mpsc::{Receiver, TryRecvError},
     time::Duration,
 };
 
@@ -194,6 +206,7 @@ impl Running {
         timeout: Option<TimeoutLoop>,
         stack: &Stack,
         params: &HashMap<String, Vec<String>>,
+        recv: &Receiver<()>,
     ) -> Result<ProcessStopped, Box<dyn Error>> {
         let mut process = match self.process.take() {
             Some(process) => process,
@@ -202,30 +215,36 @@ impl Running {
 
         let timeout = match timeout {
             Some(timeout) => timeout,
-            None => {
-                let output = process.wait_with_output()?;
-                self.handle_output(&output.stdout, &output.stderr, stack, params)?;
-                return Ok(ProcessStopped::Exited(output.status));
-            }
+            None => TimeoutLoop { duration: u64::MAX, sleep: 1000 },
         };
 
         let mut exit_status = None;
         let mut error = None;
 
-        timeout.wait_loop(|| match process.try_wait() {
-            Ok(Some(status)) => {
-                exit_status = Some(status);
-                true
+        timeout.wait_loop(|| {
+            match recv.try_recv() {
+                Ok(_) | Err(TryRecvError::Disconnected) => {
+                    error = Some(Box::new(TryRecvError::Disconnected) as Box<dyn Error>);
+                    return true;
+                }
+                _ => {}
             }
-            Ok(_) => false,
-            Err(e) => {
-                error = Some(e);
-                true
+
+            match process.try_wait() {
+                Ok(Some(status)) => {
+                    exit_status = Some(status);
+                    true
+                }
+                Ok(_) => false,
+                Err(e) => {
+                    error = Some(Box::new(e));
+                    true
+                }
             }
         });
 
         if let Some(err) = error {
-            return Err(Box::new(err));
+            return Err(err);
         }
 
         if exit_status.is_none() {
@@ -289,10 +308,21 @@ pub struct TestBed {
     stack: Stack,
     instructions: Vec<Instruction>,
     instruction_idx: usize,
+    shutdown_signal: Receiver<()>,
+}
+
+impl Drop for TestBed {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
 }
 
 impl TestBed {
-    pub fn new(params: HashMap<String, Vec<String>>, instructions: Vec<Instruction>) -> Self {
+    pub fn new(
+        params: HashMap<String, Vec<String>>,
+        instructions: Vec<Instruction>,
+        shutdown_signal: Receiver<()>,
+    ) -> Self {
         Self {
             map: HashMap::new(),
             params,
@@ -300,6 +330,7 @@ impl TestBed {
             loop_points: vec![],
             instructions,
             instruction_idx: 0,
+            shutdown_signal,
         }
     }
 
@@ -384,7 +415,7 @@ impl TestBed {
         let timeout = timeout
             .map(|(duration, sleep_times)| TimeoutLoop::from_sleep_times(duration, sleep_times));
 
-        match proc.wait_or_terminate(timeout, &id.loop_idx, &self.params)? {
+        match proc.wait_or_terminate(timeout, &id.loop_idx, &self.params, &self.shutdown_signal)? {
             ProcessStopped::Exited(status) => {
                 println!("Process {:?}, Exit Success: {}", id, status.success())
             }
@@ -399,7 +430,12 @@ impl TestBed {
             .map(|(duration, sleep_times)| TimeoutLoop::from_sleep_times(duration, sleep_times));
 
         for (id, proc) in self.map.drain() {
-            match proc.wait_or_terminate(timeout, &id.loop_idx, &self.params)? {
+            match proc.wait_or_terminate(
+                timeout,
+                &id.loop_idx,
+                &self.params,
+                &self.shutdown_signal,
+            )? {
                 ProcessStopped::Exited(status) => {
                     println!("Process {:?}, Exit Success: {}", id, status.success())
                 }
@@ -487,6 +523,11 @@ impl TestBed {
 
     pub fn run(&mut self) {
         loop {
+            match self.shutdown_signal.try_recv() {
+                Ok(_) | Err(TryRecvError::Disconnected) => break,
+                _ => {}
+            }
+
             match self.next() {
                 Ok(false) => break,
                 Err(e) => {
