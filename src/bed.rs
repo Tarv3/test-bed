@@ -1,12 +1,11 @@
 use std::{
     collections::HashMap,
     error::Error,
-    fs::File,
     fs::OpenOptions,
     io,
     io::BufWriter,
     io::Read,
-    io::Write,
+    io::{BufRead, BufReader, Write},
     path::Path,
     process::Child,
     process::Command,
@@ -71,12 +70,54 @@ pub enum ProcessStopped {
     Killed,
 }
 
+fn spawn_file_writer<R: Read + Send, P>(reader: R, path: P, append: bool) -> std::io::Result<()>
+where
+    R: Read + Send + 'static,
+    P: AsRef<Path>,
+{
+    let create_parent = |path: &Path| -> io::Result<()> {
+        let path: &Path = path.as_ref();
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        Ok(())
+    };
+
+    let path = path.as_ref();
+    create_parent(path)?;
+    let file = match append {
+        true => OpenOptions::new().append(append).create(true).open(path)?,
+        false => OpenOptions::new().write(true).create(true).open(path)?,
+    };
+
+    let mut writer = BufWriter::new(file);
+    let path = path.as_os_str().to_string_lossy().to_string();
+
+    std::thread::spawn(move || {
+        let buf = BufReader::new(reader);
+
+        for line in buf.lines() {
+            let line = match line {
+                Ok(line) => line,
+                Err(_) => break,
+            };
+
+            if let Err(e) = writer.write_all(line.as_bytes()) {
+                println!("Write Failed {}: {}", path, e);
+                break;
+            }
+        }
+    });
+
+    Ok(())
+}
+
 pub struct Running {
-    cmd: String,
+    _cmd: String,
     pid_arg: String,
     process: Option<Child>,
-    stdout: OutputMap,
-    stderr: OutputMap,
 }
 
 impl Running {
@@ -85,58 +126,33 @@ impl Running {
         args: &[String],
         stdout: OutputMap,
         stderr: OutputMap,
-    ) -> io::Result<Self> {
-        let process =
-            Command::new(cmd).args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
-
-        let pid = format!("{}", process.id());
-
-        Ok(Self { cmd: cmd.to_string(), process: Some(process), pid_arg: pid, stdout, stderr })
-    }
-
-    pub fn kill(&mut self) -> io::Result<()> {
-        if let Some(mut value) = self.process.take() {
-            value.kill()?;
-        }
-
-        Ok(())
-    }
-
-    pub fn handle_output<'a, 'b: 'a>(
-        &'b self,
-        stdout: &[u8],
-        stderr: &[u8],
         stack: &Stack,
-        params: &'a HashMap<String, Vec<String>>,
-    ) -> Result<(), Box<dyn Error>> {
-        let print_out = |data: &[u8]| -> io::Result<()> {
-            if data.len() == 0 {
-                return Ok(());
-            }
+        params: &HashMap<String, Vec<String>>,
+    ) -> io::Result<Self> {
+        let mut process = Command::new(cmd);
+        process.args(args);
 
-            println!("-----------{} StdOut-----------", self.cmd);
-            std::io::stderr().write_all(data)?;
-            println!("----------------------------");
-
-            Ok(())
+        match stdout {
+            OutputMap::Print => process.stdout(Stdio::inherit()),
+            _ => process.stdout(Stdio::piped()),
         };
 
-        let print_err = |data: &[u8]| -> io::Result<()> {
-            if data.len() == 0 {
-                return Ok(());
-            }
-
-            println!("-----------{} StdErr-----------", self.cmd);
-            std::io::stderr().write_all(data)?;
-            println!("----------------------------");
-
-            Ok(())
+        match stderr {
+            OutputMap::Print => process.stderr(Stdio::inherit()),
+            _ => process.stderr(Stdio::piped()),
         };
 
-        let get_file = |arg: &'b Arg| -> String {
+        let mut process = process.spawn()?;
+
+        let get_file = |arg: &Arg| -> String {
             match arg {
                 Arg::String(value) => value.clone(),
-                Arg::Param { index, param, prefix, suffix } => {
+                Arg::Param {
+                    index,
+                    param,
+                    prefix,
+                    suffix,
+                } => {
                     let param = params.get(param).unwrap();
                     let idx = stack.get_idx(index).unwrap();
                     let param_value = &param[idx];
@@ -147,58 +163,46 @@ impl Running {
             }
         };
 
-        let create_parent = |path: &str| -> io::Result<()> {
-            let path: &Path = path.as_ref();
-
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
+        match stdout {
+            OutputMap::Create(arg) if process.stdout.is_some() => {
+                let file = get_file(&arg);
+                let out = process.stdout.take().unwrap();
+                spawn_file_writer(out, &file, false)?;
             }
-
-            Ok(())
-        };
-
-        match &self.stdout {
-            OutputMap::Print => print_out(stdout)?,
-            OutputMap::Create(file) => {
-                let file = get_file(file);
-                create_parent(&file)?;
-                let file = File::create(file)?;
-                let mut writer = BufWriter::new(file);
-
-                writer.write_all(stdout)?;
-                writer.flush()?;
+            OutputMap::Append(arg) if process.stdout.is_some() => {
+                let file = get_file(&arg);
+                let out = process.stdout.take().unwrap();
+                spawn_file_writer(out, &file, true)?;
             }
-            OutputMap::Append(file) => {
-                let file = get_file(file);
-                create_parent(&file)?;
-                let file = OpenOptions::new().append(true).create(true).open(file)?;
-                let mut writer = BufWriter::new(file);
-
-                writer.write_all(stdout)?;
-                writer.flush()?;
-            }
+            _ => {}
         }
 
-        match &self.stderr {
-            OutputMap::Print => print_err(stderr)?,
-            OutputMap::Create(file) => {
-                let file = get_file(file);
-                create_parent(&file)?;
-                let file = File::create(file)?;
-                let mut writer = BufWriter::new(file);
-
-                writer.write_all(stderr)?;
-                writer.flush()?;
+        match stderr {
+            OutputMap::Create(arg) if process.stderr.is_some() => {
+                let file = get_file(&arg);
+                let out = process.stderr.take().unwrap();
+                spawn_file_writer(out, &file, false)?;
             }
-            OutputMap::Append(file) => {
-                let file = get_file(file);
-                create_parent(&file)?;
-                let file = OpenOptions::new().append(true).create(true).open(file)?;
-                let mut writer = BufWriter::new(file);
-
-                writer.write_all(stderr)?;
-                writer.flush()?;
+            OutputMap::Append(arg) if process.stderr.is_some() => {
+                let file = get_file(&arg);
+                let out = process.stderr.take().unwrap();
+                spawn_file_writer(out, &file, true)?;
             }
+            _ => {}
+        }
+
+        let pid = format!("{}", process.id());
+
+        Ok(Self {
+            _cmd: cmd.to_string(),
+            process: Some(process),
+            pid_arg: pid,
+        })
+    }
+
+    pub fn kill(&mut self) -> io::Result<()> {
+        if let Some(mut value) = self.process.take() {
+            value.kill()?;
         }
 
         Ok(())
@@ -207,8 +211,6 @@ impl Running {
     pub fn wait_or_terminate(
         mut self,
         timeout: Option<TimeoutLoop>,
-        stack: &Stack,
-        params: &HashMap<String, Vec<String>>,
         shutdown: &Arc<AtomicBool>,
     ) -> Result<ProcessStopped, Box<dyn Error>> {
         let mut process = match self.process.take() {
@@ -218,7 +220,10 @@ impl Running {
 
         let timeout = match timeout {
             Some(timeout) => timeout,
-            None => TimeoutLoop { duration: u64::MAX, sleep: 1000 },
+            None => TimeoutLoop {
+                duration: u64::MAX,
+                sleep: 1000,
+            },
         };
 
         let mut exit_status = None;
@@ -255,19 +260,6 @@ impl Running {
                 None => return Ok(ProcessStopped::Killed),
             }
         }
-
-        let mut stdout = vec![];
-        let mut stderr = vec![];
-
-        if let Some(mut out) = process.stdout.take() {
-            out.read_to_end(&mut stdout)?;
-        }
-
-        if let Some(mut err) = process.stderr.take() {
-            err.read_to_end(&mut stderr)?;
-        }
-
-        self.handle_output(&stdout, &stderr, stack, params)?;
 
         Ok(ProcessStopped::Exited(exit_status.unwrap()))
     }
@@ -353,7 +345,10 @@ impl TestBed {
     }
 
     pub fn get_id(&self, id: usize) -> ProcessId {
-        ProcessId { loop_idx: self.stack.clone(), id }
+        ProcessId {
+            loop_idx: self.stack.clone(),
+            id,
+        }
     }
 
     pub fn spawn(
@@ -371,7 +366,12 @@ impl TestBed {
             .iter()
             .map(|arg| match arg {
                 Arg::String(value) => value.clone(),
-                Arg::Param { index, param, prefix, suffix } => {
+                Arg::Param {
+                    index,
+                    param,
+                    prefix,
+                    suffix,
+                } => {
                     let param = self.params.get(param).unwrap();
                     let idx = self.stack.get_idx(index).unwrap();
                     let param_value = &param[idx];
@@ -379,7 +379,10 @@ impl TestBed {
                     format!("{}{}{}", prefix, param_value, suffix)
                 }
                 Arg::Pid(id) => {
-                    let id = ProcessId { loop_idx: self.stack.clone(), id: *id };
+                    let id = ProcessId {
+                        loop_idx: self.stack.clone(),
+                        id: *id,
+                    };
                     match self.map.get(&id) {
                         Some(value) => value.pid_arg.clone(),
                         None => "_".into(),
@@ -387,7 +390,23 @@ impl TestBed {
                 }
             })
             .collect::<Vec<_>>();
-        let running = Running::new(cmd, &args, stdout, stderr)?;
+
+        let running = match Running::new(cmd, &args, stdout, stderr, &self.stack, &self.params) {
+            Ok(value) => value,
+            Err(e) => {
+                print!("ERROR: {cmd}");
+
+                for arg in args {
+                    print!(" {arg}");
+                }
+
+                println!();
+                println!("{e}");
+
+                return Ok(());
+            }
+        };
+
         let previous = self.map.insert(id.clone(), running);
 
         if let Some(mut proc) = previous {
@@ -415,7 +434,7 @@ impl TestBed {
         let timeout = timeout
             .map(|(duration, sleep_times)| TimeoutLoop::from_sleep_times(duration, sleep_times));
 
-        match proc.wait_or_terminate(timeout, &id.loop_idx, &self.params, &self.shutdown_signal)? {
+        match proc.wait_or_terminate(timeout, &self.shutdown_signal)? {
             ProcessStopped::Exited(status) => {
                 println!("Process {:?}, Exit Success: {}", id, status.success())
             }
@@ -430,12 +449,7 @@ impl TestBed {
             .map(|(duration, sleep_times)| TimeoutLoop::from_sleep_times(duration, sleep_times));
 
         for (id, proc) in self.map.drain() {
-            match proc.wait_or_terminate(
-                timeout,
-                &id.loop_idx,
-                &self.params,
-                &self.shutdown_signal,
-            )? {
+            match proc.wait_or_terminate(timeout, &self.shutdown_signal)? {
                 ProcessStopped::Exited(status) => {
                     println!("Process {:?}, Exit Success: {}", id, status.success())
                 }
@@ -459,7 +473,13 @@ impl TestBed {
                 let id = self.get_id(*id);
                 self.kill(id)?;
             }
-            TestCommand::Spawn { id, command, args, stdout, stderr } => {
+            TestCommand::Spawn {
+                id,
+                command,
+                args,
+                stdout,
+                stderr,
+            } => {
                 self.spawn(*id, &command, &args[..], stdout.clone(), stderr.clone())?;
             }
             TestCommand::Sleep(ms) => TestBed::sleep(*ms),
@@ -485,8 +505,14 @@ impl TestBed {
                 };
 
                 self.instruction_idx += 1;
-                let point = LoopPoint { instruction_idx: self.instruction_idx, count };
-                let idx = LoopIdx { id: id.clone(), idx: 0 };
+                let point = LoopPoint {
+                    instruction_idx: self.instruction_idx,
+                    count,
+                };
+                let idx = LoopIdx {
+                    id: id.clone(),
+                    idx: 0,
+                };
                 self.loop_points.push(point);
                 self.stack.0.push(idx);
             }
@@ -507,8 +533,7 @@ impl TestBed {
                     self.instruction_idx = point.instruction_idx;
                     self.loop_points.push(point);
                     self.stack.0.push(idx);
-                }
-                else {
+                } else {
                     self.instruction_idx += 1;
                 }
             }
