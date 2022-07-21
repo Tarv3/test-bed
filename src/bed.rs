@@ -1,22 +1,23 @@
 use std::{
     collections::HashMap,
-    error::Error,
     fs::OpenOptions,
     io,
-    io::BufWriter,
     io::Read,
     io::{BufRead, BufReader, Write},
+    io::{BufWriter, ErrorKind},
     path::Path,
     process::Child,
     process::Command,
-    process::ExitStatus,
     process::Stdio,
+    str::{from_utf8, from_utf8_unchecked},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
     time::Duration,
 };
+
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 
 use crate::parser::*;
 
@@ -65,11 +66,6 @@ impl TimeoutLoop {
     }
 }
 
-pub enum ProcessStopped {
-    Exited(ExitStatus),
-    Killed,
-}
-
 fn spawn_file_writer<R: Read + Send, P>(reader: R, path: P, append: bool) -> std::io::Result<()>
 where
     R: Read + Send + 'static,
@@ -99,54 +95,153 @@ where
         let buf = BufReader::new(reader);
 
         for line in buf.lines() {
-            let line = match line {
+            let mut line = match line {
                 Ok(line) => line,
                 Err(_) => break,
             };
+
+            line.retain(|value| value != '\r');
 
             if let Err(e) = writer.write_all(line.as_bytes()) {
                 println!("Write Failed {}: {}", path, e);
                 break;
             }
+
+            if let Err(e) = writer.write_all(&['\n' as u8]) {
+                println!("Write Failed {}: {}", path, e);
+                break;
+            }
+
+            writer.flush().ok();
         }
     });
 
     Ok(())
 }
 
+fn spawn_progress_writer<R: Read + Send>(reader: R, bar: ProgressBar)
+where
+    R: Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut buf = BufReader::new(reader);
+        let pattern = ['\n', '\r'];
+        let mut bytes = vec![];
+
+        loop {
+            let next_bytes = match buf.fill_buf() {
+                Ok(next) => next,
+                Err(e) if e.kind() == ErrorKind::Interrupted => {
+                    continue;
+                }
+                _ => break,
+            };
+
+            if next_bytes.len() == 0 {
+                continue;
+            }
+
+            bytes.extend_from_slice(next_bytes);
+            let consumed = next_bytes.len();
+            buf.consume(consumed);
+
+            loop {
+                let (mut remove, error, str) = match from_utf8(&bytes) {
+                    Ok(str) => (bytes.len(), None, str),
+                    Err(invalid) => {
+                        let valid = invalid.valid_up_to();
+                        // SAFETY: We know that the bytes are valid up until 'valid' so this is safe
+                        let str = unsafe { from_utf8_unchecked(&bytes[..valid]) };
+
+                        (valid, invalid.error_len(), str)
+                    }
+                };
+
+                let end_of_error = error.map(|value| value + remove);
+
+                match str.rfind(&pattern) {
+                    Some(idx) => {
+                        remove = idx;
+                        let before_pattern = &str[..idx];
+                        let line_start = before_pattern.rfind(&pattern).unwrap_or(0);
+                        let mut line = before_pattern[line_start..].to_string();
+                        line.retain(|val| !pattern.contains(&val));
+
+                        if !line.is_empty() {
+                            bar.set_message(line);
+                            bar.inc(1);
+                        }
+                    }
+                    // Dont remove anything, we just havent received enough bytes yet
+                    None => {
+                        if error.is_none() {
+                            break;
+                        }
+                    }
+                }
+
+                let remove = end_of_error.unwrap_or(remove);
+
+                if remove == 0 {
+                    break;
+                }
+
+                let remaining = bytes.len() - remove;
+
+                for i in 0..remaining {
+                    let byte = bytes[i + remove];
+                    bytes[i] = byte;
+                }
+
+                bytes.truncate(remaining);
+            }
+        }
+    });
+}
+
 pub struct Running {
     _cmd: String,
     pid_arg: String,
     process: Option<Child>,
+    progress: ProgressBar,
 }
 
 impl Running {
     pub fn new(
+        progress: ProgressBar,
         cmd: &str,
         args: &[String],
         stdout: OutputMap,
         stderr: OutputMap,
         stack: &Stack,
         params: &HashMap<String, Vec<String>>,
-    ) -> io::Result<Self> {
+    ) -> Option<Self> {
         let mut process = Command::new(cmd);
         process.args(args);
+        process.stdout(Stdio::piped());
+        process.stderr(Stdio::piped());
 
-        match stdout {
-            OutputMap::Print => process.stdout(Stdio::inherit()),
-            _ => process.stdout(Stdio::piped()),
+        let mut arg_string = String::new();
+
+        for arg in args.iter() {
+            arg_string.push_str(arg);
+            arg_string.push(' ');
+        }
+
+        progress.set_prefix(cmd.to_string());
+        progress.set_message(arg_string);
+
+        let mut process = match process.spawn() {
+            Ok(process) => process,
+            Err(e) => {
+                progress.set_message(format!("ERROR: {e}"));
+                return None;
+            }
         };
 
-        match stderr {
-            OutputMap::Print => process.stderr(Stdio::inherit()),
-            _ => process.stderr(Stdio::piped()),
-        };
-
-        let mut process = process.spawn()?;
-
-        let get_file = |arg: &Arg| -> String {
+        let get_file = |arg: &Arg| -> Option<String> {
             match arg {
-                Arg::String(value) => value.clone(),
+                Arg::String(value) => Some(value.clone()),
                 Arg::Param {
                     index,
                     param,
@@ -157,62 +252,71 @@ impl Running {
                     let idx = stack.get_idx(index).unwrap();
                     let param_value = &param[idx];
 
-                    format!("{}{}{}", prefix, param_value, suffix)
+                    Some(format!("{}{}{}", prefix, param_value, suffix))
                 }
-                Arg::Pid(_) => panic!("Tried to use PID as file"),
+                Arg::Pid(_) => {
+                    progress.set_message("Tried to use PID as file output");
+                    return None;
+                }
             }
         };
 
+        let out = process.stdout.take().unwrap();
         match stdout {
-            OutputMap::Create(arg) if process.stdout.is_some() => {
-                let file = get_file(&arg);
-                let out = process.stdout.take().unwrap();
-                spawn_file_writer(out, &file, false)?;
+            OutputMap::Create(arg) => {
+                if let Some(file) = get_file(&arg) {
+                    spawn_file_writer(out, &file, false).ok();
+                }
             }
-            OutputMap::Append(arg) if process.stdout.is_some() => {
-                let file = get_file(&arg);
-                let out = process.stdout.take().unwrap();
-                spawn_file_writer(out, &file, true)?;
+            OutputMap::Append(arg) => {
+                if let Some(file) = get_file(&arg) {
+                    spawn_file_writer(out, &file, true).ok();
+                }
             }
-            _ => {}
+            _ => {
+                spawn_progress_writer(out, progress.clone());
+            }
         }
 
+        let out = process.stderr.take().unwrap();
         match stderr {
-            OutputMap::Create(arg) if process.stderr.is_some() => {
-                let file = get_file(&arg);
-                let out = process.stderr.take().unwrap();
-                spawn_file_writer(out, &file, false)?;
+            OutputMap::Create(arg) => {
+                if let Some(file) = get_file(&arg) {
+                    spawn_file_writer(out, &file, false).ok();
+                }
             }
-            OutputMap::Append(arg) if process.stderr.is_some() => {
-                let file = get_file(&arg);
-                let out = process.stderr.take().unwrap();
-                spawn_file_writer(out, &file, true)?;
+            OutputMap::Append(arg) => {
+                if let Some(file) = get_file(&arg) {
+                    spawn_file_writer(out, &file, true).ok();
+                }
             }
-            _ => {}
+            _ => spawn_progress_writer(out, progress.clone()),
         }
 
         let pid = format!("{}", process.id());
 
-        Ok(Self {
+        Some(Self {
             _cmd: cmd.to_string(),
             process: Some(process),
             pid_arg: pid,
+            progress,
         })
     }
 
-    pub fn kill(&mut self) -> io::Result<()> {
-        if let Some(mut value) = self.process.take() {
-            value.kill()?;
-        }
+    pub fn kill(&mut self) {
+        if let Some(mut process) = self.process.take() {
+            match process.kill() {
+                Ok(_) => self.progress.finish_with_message("Killed"),
+                Err(e) => self
+                    .progress
+                    .finish_with_message(format!("Failed to Kill: {e}")),
+            }
 
-        Ok(())
+            self.progress.inc(1);
+        }
     }
 
-    pub fn wait_or_terminate(
-        mut self,
-        timeout: Option<TimeoutLoop>,
-        shutdown: &Arc<AtomicBool>,
-    ) -> Result<ProcessStopped, Box<dyn Error>> {
+    pub fn wait_or_terminate(mut self, timeout: Option<TimeoutLoop>, shutdown: &Arc<AtomicBool>) {
         let mut process = match self.process.take() {
             Some(process) => process,
             None => panic!("Tried to take missing child process"),
@@ -234,6 +338,8 @@ impl Running {
                 return true;
             }
 
+            self.progress.inc(1);
+
             match process.try_wait() {
                 Ok(Some(status)) => {
                     exit_status = Some(status);
@@ -247,21 +353,24 @@ impl Running {
             }
         });
 
-        if exit_status.is_none() {
-            match process.kill() {
-                Ok(_) => {}
-                Err(err) => {
-                    println!("Failed to kill process: {err}");
-                }
-            }
+        if let Some(err) = error {
+            process.kill().ok();
 
-            match error {
-                Some(err) => return Err(err),
-                None => return Ok(ProcessStopped::Killed),
-            }
+            self.progress
+                .finish_with_message(format!("Error while waiting: {err}"));
         }
 
-        Ok(ProcessStopped::Exited(exit_status.unwrap()))
+        match exit_status {
+            Some(status) => match status.success() {
+                true => self.progress.finish_with_message("Success"),
+                false => self
+                    .progress
+                    .finish_with_message(format!("Failed: {:?}", status.code())),
+            },
+            None => self.kill(),
+        }
+
+        self.progress.inc(1);
     }
 }
 
@@ -280,6 +389,23 @@ pub struct LoopPoint {
 pub struct ProcessId {
     loop_idx: Stack,
     id: usize,
+}
+
+impl std::fmt::Display for ProcessId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[")?;
+        let mut iter = self.loop_idx.0.iter();
+
+        if let Some(first) = iter.next() {
+            write!(f, "{}({})", first.id, first.idx)?;
+        }
+
+        for value in iter {
+            write!(f, ", {}({})", value.id, value.idx)?;
+        }
+
+        write!(f, "]: {}", self.id)
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash, Default)]
@@ -305,6 +431,9 @@ pub struct TestBed {
     instructions: Vec<Instruction>,
     instruction_idx: usize,
     pub shutdown_signal: Arc<AtomicBool>,
+
+    progress: MultiProgress,
+    status: ProgressBar,
 }
 
 impl Drop for TestBed {
@@ -315,6 +444,18 @@ impl Drop for TestBed {
 
 impl TestBed {
     pub fn new(params: HashMap<String, Vec<String>>, instructions: Vec<Instruction>) -> Self {
+        let status = ProgressBar::new_spinner();
+        status.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner} {wide_msg}")
+                .unwrap(),
+        );
+
+        let progress = MultiProgress::with_draw_target(ProgressDrawTarget::stdout());
+        // let progress = MultiProgress::with_draw_target(ProgressDrawTarget::hidden());
+        let status = progress.add(status);
+        status.enable_steady_tick(std::time::Duration::from_millis(500));
+
         Self {
             map: HashMap::new(),
             params,
@@ -323,25 +464,33 @@ impl TestBed {
             instructions,
             instruction_idx: 0,
             shutdown_signal: Arc::new(AtomicBool::new(false)),
+            progress,
+            status,
         }
     }
 
     pub fn shutdown(&mut self) {
-        for (id, mut proc) in self.map.drain() {
-            match proc.kill() {
-                Ok(_) => println!("Killed: {:?}", id),
-                Err(e) => println!("Failed to Kill {:?}: {}", id, e),
-            }
+        for (_, mut proc) in self.map.drain() {
+            proc.kill();
         }
     }
 
-    pub fn kill(&mut self, id: ProcessId) -> io::Result<()> {
-        println!("Killing {:?}", id);
-
-        match self.map.remove(&id) {
-            Some(mut value) => value.kill(),
-            None => Ok(()),
+    pub fn kill(&mut self, id: ProcessId) {
+        if let Some(mut value) = self.map.remove(&id) {
+            value.kill();
         }
+    }
+
+    pub fn new_spinner(&mut self) -> ProgressBar {
+        let bar = ProgressBar::new_spinner();
+        bar.set_style(
+            // ProgressStyle::default_spinner().template(&format!("{{spinner}} {cmd}: {{wide_msg}}")),
+            ProgressStyle::default_spinner()
+                .template("{spinner} {prefix:.bold.dim} {wide_msg}")
+                .unwrap(),
+        );
+
+        self.progress.add(bar)
     }
 
     pub fn get_id(&self, id: usize) -> ProcessId {
@@ -358,9 +507,11 @@ impl TestBed {
         args: &[Arg],
         stdout: OutputMap,
         stderr: OutputMap,
-    ) -> io::Result<()> {
+    ) {
         let id = self.get_id(id);
-        println!("Spawning {:?}", id);
+        self.status.set_message(format!("Spawning {id}"));
+        self.status.inc(1);
+        let spinner = self.new_spinner();
 
         let args = args
             .iter()
@@ -391,87 +542,67 @@ impl TestBed {
             })
             .collect::<Vec<_>>();
 
-        let running = match Running::new(cmd, &args, stdout, stderr, &self.stack, &self.params) {
-            Ok(value) => value,
-            Err(e) => {
-                print!("ERROR: {cmd}");
+        let running = Running::new(
+            spinner.clone(),
+            cmd,
+            &args,
+            stdout,
+            stderr,
+            &self.stack,
+            &self.params,
+        );
+        spinner.inc(1);
 
-                for arg in args {
-                    print!(" {arg}");
-                }
-
-                println!();
-                println!("{e}");
-
-                return Ok(());
-            }
+        let running = match running {
+            Some(running) => running,
+            None => return,
         };
 
         let previous = self.map.insert(id.clone(), running);
 
         if let Some(mut proc) = previous {
             println!("WARN: Process {:?} overwritten", id);
-
-            proc.kill()?;
+            proc.kill();
         }
-
-        Ok(())
     }
 
-    pub fn wait_or_terminate(
-        &mut self,
-        id: usize,
-        timeout: Option<(u64, u64)>,
-    ) -> Result<(), Box<dyn Error>> {
+    pub fn wait_or_terminate(&mut self, id: usize, timeout: Option<(u64, u64)>) {
         let id = self.get_id(id);
-        println!("Waiting for: {:?}", id);
+        self.status.set_message(format!("Waiting for: {id}"));
+        self.status.inc(1);
 
         let proc = match self.map.remove(&id) {
             Some(proc) => proc,
-            None => return Ok(()),
+            None => return,
         };
 
         let timeout = timeout
             .map(|(duration, sleep_times)| TimeoutLoop::from_sleep_times(duration, sleep_times));
 
-        match proc.wait_or_terminate(timeout, &self.shutdown_signal)? {
-            ProcessStopped::Exited(status) => {
-                println!("Process {:?}, Exit Success: {}", id, status.success())
-            }
-            ProcessStopped::Killed => println!("WARN: Process {:?} Kill due to wait timeout", id),
-        }
-
-        Ok(())
+        proc.wait_or_terminate(timeout, &self.shutdown_signal);
     }
 
-    pub fn wait_all(&mut self, timeout: Option<(u64, u64)>) -> Result<(), Box<dyn Error>> {
+    pub fn wait_all(&mut self, timeout: Option<(u64, u64)>) {
+        self.status.set_message("Waiting All");
+        self.status.inc(1);
         let timeout = timeout
             .map(|(duration, sleep_times)| TimeoutLoop::from_sleep_times(duration, sleep_times));
 
-        for (id, proc) in self.map.drain() {
-            match proc.wait_or_terminate(timeout, &self.shutdown_signal)? {
-                ProcessStopped::Exited(status) => {
-                    println!("Process {:?}, Exit Success: {}", id, status.success())
-                }
-                ProcessStopped::Killed => {
-                    println!("WARN: Process {:?} Kill due to wait timeout", id)
-                }
-            }
+        for (_, proc) in self.map.drain() {
+            proc.wait_or_terminate(timeout, &self.shutdown_signal);
         }
-
-        Ok(())
     }
 
-    fn sleep(ms: u64) {
-        println!("Sleeping: {}", ms);
+    fn sleep(&self, ms: u64) {
+        self.status.set_message("Sleeping");
         std::thread::sleep(Duration::from_millis(ms));
     }
 
-    pub fn run_command(&mut self, command: &TestCommand) -> Result<(), Box<dyn Error>> {
+    pub fn run_command(&mut self, command: &TestCommand) {
         match command {
             TestCommand::Kill(id) => {
                 let id = self.get_id(*id);
-                self.kill(id)?;
+                self.kill(id);
             }
             TestCommand::Spawn {
                 id,
@@ -480,19 +611,17 @@ impl TestBed {
                 stdout,
                 stderr,
             } => {
-                self.spawn(*id, &command, &args[..], stdout.clone(), stderr.clone())?;
+                self.spawn(*id, &command, &args[..], stdout.clone(), stderr.clone());
             }
-            TestCommand::Sleep(ms) => TestBed::sleep(*ms),
-            TestCommand::WaitFor { id, timeout } => self.wait_or_terminate(*id, *timeout)?,
-            TestCommand::WaitAll(timeout) => self.wait_all(*timeout)?,
+            TestCommand::Sleep(ms) => self.sleep(*ms),
+            TestCommand::WaitFor { id, timeout } => self.wait_or_terminate(*id, *timeout),
+            TestCommand::WaitAll(timeout) => self.wait_all(*timeout),
         }
-
-        Ok(())
     }
 
-    pub fn next(&mut self) -> Result<bool, Box<dyn Error>> {
+    pub fn next(&mut self) -> bool {
         if self.instruction_idx >= self.instructions.len() {
-            return Ok(false);
+            return false;
         }
 
         let next_instruction = self.instructions[self.instruction_idx].clone();
@@ -521,7 +650,7 @@ impl TestBed {
                 let idx = self.stack.0.pop();
 
                 if point.is_none() || idx.is_none() {
-                    return Ok(false);
+                    return false;
                 }
 
                 let point = point.unwrap();
@@ -539,29 +668,26 @@ impl TestBed {
             }
             Instruction::Command(command) => {
                 self.instruction_idx += 1;
-                self.run_command(&command)?;
+                self.run_command(&command);
             }
         }
 
-        Ok(true)
+        true
     }
 
-    pub fn run(&mut self) {
+    pub fn run(mut self) {
         loop {
             if self.shutdown_signal.load(Ordering::Relaxed) {
                 break;
             }
 
-            match self.next() {
-                Ok(false) => break,
-                Err(e) => {
-                    println!("Error {e}");
-                    break;
-                }
-                _ => {}
+            if !self.next() {
+                break;
             }
         }
 
         self.shutdown();
+        // self.progress.fi
+        // self.progress.join().unwrap();
     }
 }
