@@ -241,18 +241,22 @@ impl Running {
 
         let get_file = |arg: &Arg| -> Option<String> {
             match arg {
-                Arg::String(value) => Some(value.clone()),
-                Arg::Param {
-                    index,
-                    param,
-                    prefix,
-                    suffix,
-                } => {
-                    let param = params.get(param).unwrap();
-                    let idx = stack.get_idx(index).unwrap();
-                    let param_value = &param[idx];
+                Arg::Templated(templated) => {
+                    let mut string = String::new();
 
-                    Some(format!("{}{}{}", prefix, param_value, suffix))
+                    for value in templated {
+                        match value {
+                            TemplatedArg::Text(text) => string.push_str(&text),
+                            TemplatedArg::Param { index, param } => {
+                                let param = params.get(param).unwrap();
+                                let idx = stack.get_idx(index).unwrap();
+                                let param_value = &param[idx];
+                                string.push_str(param_value);
+                            }
+                        }
+                    }
+
+                    Some(string)
                 }
                 Arg::Pid(_) => {
                     progress.set_message("Tried to use PID as file output");
@@ -516,18 +520,22 @@ impl TestBed {
         let args = args
             .iter()
             .map(|arg| match arg {
-                Arg::String(value) => value.clone(),
-                Arg::Param {
-                    index,
-                    param,
-                    prefix,
-                    suffix,
-                } => {
-                    let param = self.params.get(param).unwrap();
-                    let idx = self.stack.get_idx(index).unwrap();
-                    let param_value = &param[idx];
+                Arg::Templated(templated) => {
+                    let mut string = String::new();
 
-                    format!("{}{}{}", prefix, param_value, suffix)
+                    for value in templated {
+                        match value {
+                            TemplatedArg::Text(text) => string.push_str(&text),
+                            TemplatedArg::Param { index, param } => {
+                                let param = self.params.get(param).unwrap();
+                                let idx = self.stack.get_idx(index).unwrap();
+                                let param_value = &param[idx];
+                                string.push_str(param_value);
+                            }
+                        }
+                    }
+
+                    string
                 }
                 Arg::Pid(id) => {
                     let id = ProcessId {

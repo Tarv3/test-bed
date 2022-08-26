@@ -71,28 +71,20 @@ spawn = {
 program = { inner }
 
 arg = ${
-    pid | 
-    prefix ~ template ~ suffix |
-    prefix ~ template |
-    template ~ suffix |
-    template |
-    prefix
+    pid | templated_arg
 }
 
 pid = ${ "pid(" ~ integer ~ ")" }
 
-prefix = @{ prefix_char+ }
-
-prefix_char = {
-    !(WHITESPACE | "[" | ";" | ")") ~ ANY
+templated_arg = ${
+    (arg_text | template)+
 }
 
-suffix = @{ suffix_char+ }
+arg_text = @{ arg_char+ }
 
-suffix_char = {
-    !(WHITESPACE | ";" | ")") ~ ANY
+arg_char = {
+    !(WHITESPACE | "[" | ";" | "]" | "(" | ")") ~ ANY
 }
-
 
 template = {
     "["

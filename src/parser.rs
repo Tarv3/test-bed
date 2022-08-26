@@ -89,7 +89,10 @@ fn parse_for_loop(pair: Pair<Rule>, instructions: &mut Vec<Instruction>) {
     let idx_id = inner.next().unwrap().as_str().into();
     let param_id = inner.next().unwrap().as_str().into();
 
-    instructions.push(Instruction::BeginFor { id: idx_id, param: param_id });
+    instructions.push(Instruction::BeginFor {
+        id: idx_id,
+        param: param_id,
+    });
 
     for value in inner {
         parse_expression(value, instructions);
@@ -132,7 +135,10 @@ fn parse_wait_for(pair: Pair<Rule>) -> TestCommand {
     if let Some(ms) = inner.next() {
         let retries = inner.next().unwrap();
 
-        timeout = Some((ms.as_str().parse().unwrap(), retries.as_str().parse().unwrap()))
+        timeout = Some((
+            ms.as_str().parse().unwrap(),
+            retries.as_str().parse().unwrap(),
+        ))
     }
     TestCommand::WaitFor { id, timeout }
 }
@@ -144,7 +150,10 @@ fn parse_wait_all(pair: Pair<Rule>) -> TestCommand {
     if let Some(ms) = inner.next() {
         let retries = inner.next().unwrap();
 
-        timeout = Some((ms.as_str().parse().unwrap(), retries.as_str().parse().unwrap()))
+        timeout = Some((
+            ms.as_str().parse().unwrap(),
+            retries.as_str().parse().unwrap(),
+        ))
     }
     TestCommand::WaitAll(timeout)
 }
@@ -184,47 +193,69 @@ fn parse_spawn(pair: Pair<Rule>) -> TestCommand {
         args.push(arg);
     }
 
-    TestCommand::Spawn { id, command: program, args, stdout, stderr }
+    TestCommand::Spawn {
+        id,
+        command: program,
+        args,
+        stdout,
+        stderr,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TestCommand {
     Kill(usize),
-    Spawn { id: usize, command: String, args: Vec<Arg>, stdout: OutputMap, stderr: OutputMap },
+    Spawn {
+        id: usize,
+        command: String,
+        args: Vec<Arg>,
+        stdout: OutputMap,
+        stderr: OutputMap,
+    },
     Sleep(u64),
-    WaitFor { id: usize, timeout: Option<(u64, u64)> },
+    WaitFor {
+        id: usize,
+        timeout: Option<(u64, u64)>,
+    },
     WaitAll(Option<(u64, u64)>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum TemplatedArg {
+    Text(String),
+    Param { index: String, param: String },
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Arg {
-    String(String),
-    Param { index: String, param: String, prefix: String, suffix: String },
+    Templated(Vec<TemplatedArg>),
     Pid(usize),
 }
 
 impl Arg {
     pub fn parse(pair: Pair<Rule>) -> Self {
         let inner_rules = pair.into_inner();
-
-        let mut prefix = None;
-        let mut template = None;
-        let mut suffix = None;
+        let mut templated = vec![];
 
         for value in inner_rules {
             match value.as_rule() {
-                Rule::prefix => {
-                    prefix = Some(value.as_str().into());
-                }
-                Rule::template => {
-                    let mut inner = value.into_inner();
-                    let index = inner.next().unwrap().as_str().into();
-                    let param = inner.next().unwrap().as_str().into();
+                Rule::templated_arg => {
+                    for value in value.into_inner() {
+                        match value.as_rule() {
+                            Rule::arg_text => {
+                                let value = value.as_str().into();
+                                templated.push(TemplatedArg::Text(value));
+                            }
+                            Rule::template => {
+                                let mut inner = value.into_inner();
+                                let index = inner.next().unwrap().as_str().into();
+                                let param = inner.next().unwrap().as_str().into();
 
-                    template = Some((index, param));
-                }
-                Rule::suffix => {
-                    suffix = Some(value.as_str().into());
+                                templated.push(TemplatedArg::Param { index, param })
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
                 }
                 Rule::pid => {
                     let inner = value.into_inner();
@@ -236,16 +267,18 @@ impl Arg {
             }
         }
 
-        match (prefix, template, suffix) {
-            (Some(prefix), None, None) => Arg::String(prefix),
-            (prefix, Some((index, param)), suffix) => Arg::Param {
-                index,
-                param,
-                prefix: prefix.unwrap_or(String::new()),
-                suffix: suffix.unwrap_or(String::new()),
-            },
-            _ => unreachable!(),
-        }
+        Self::Templated(templated)
+
+        // match (prefix, template, suffix) {
+        //     (Some(prefix), None, None) => Arg::String(prefix),
+        //     (prefix, Some((index, param)), suffix) => Arg::Param {
+        //         index,
+        //         param,
+        //         prefix: prefix.unwrap_or(String::new()),
+        //         suffix: suffix.unwrap_or(String::new()),
+        //     },
+        //     _ => unreachable!(),
+        // }
     }
 }
 
