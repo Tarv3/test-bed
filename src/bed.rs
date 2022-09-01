@@ -138,7 +138,7 @@ where
             };
 
             if next_bytes.len() == 0 {
-                continue;
+                break;
             }
 
             bytes.extend_from_slice(next_bytes);
