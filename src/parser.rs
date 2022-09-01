@@ -89,16 +89,24 @@ fn parse_for_loop(pair: Pair<Rule>, instructions: &mut Vec<Instruction>) {
     let idx_id = inner.next().unwrap().as_str().into();
     let param_id = inner.next().unwrap().as_str().into();
 
+    let for_idx = instructions.len();
+
     instructions.push(Instruction::BeginFor {
         id: idx_id,
         param: param_id,
+        end_for: for_idx + 1,
     });
 
     for value in inner {
         parse_expression(value, instructions);
     }
 
+    let end = instructions.len();
     instructions.push(Instruction::NextLoop);
+    match &mut instructions[for_idx] {
+        Instruction::BeginFor { end_for, .. } => *end_for = end,
+        _ => unreachable!("For loop should be here"),
+    }
 }
 
 fn parse_command(pair: Pair<Rule>, instructions: &mut Vec<Instruction>) {

@@ -23,7 +23,7 @@ use crate::parser::*;
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    BeginFor { id: String, param: String },
+    BeginFor { id: String, param: String, end_for: usize },
     NextLoop,
     Command(TestCommand),
 }
@@ -635,11 +635,16 @@ impl TestBed {
         let next_instruction = self.instructions[self.instruction_idx].clone();
 
         match next_instruction {
-            Instruction::BeginFor { id, param } => {
+            Instruction::BeginFor { id, param, end_for } => {
                 let count = match self.params.get(&param) {
                     Some(value) => value.len(),
                     None => panic!("No param named {}", param),
                 };
+
+                if count == 0 {
+                    self.instruction_idx = end_for + 1;
+                    return true;
+                }
 
                 self.instruction_idx += 1;
                 let point = LoopPoint {
