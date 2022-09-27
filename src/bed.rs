@@ -689,6 +689,8 @@ impl TestBed {
     }
 
     pub fn run(mut self) {
+        let start = std::time::Instant::now(); 
+
         loop {
             if self.shutdown_signal.load(Ordering::Relaxed) {
                 break;
@@ -700,7 +702,7 @@ impl TestBed {
         }
 
         self.shutdown();
-        // self.progress.fi
-        // self.progress.join().unwrap();
+        let elapsed = start.elapsed().as_secs_f64();
+        println!("Test took {} seconds", elapsed);
     }
 }
