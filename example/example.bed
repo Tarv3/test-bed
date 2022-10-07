@@ -1,0 +1,42 @@
+[includes]
+"example/templates"
+
+[output]
+"example/builds"
+
+[globals]
+variable_1 = [
+    ("test\"", output="property"),
+    ("test2", output="property2\""),
+    ("test3", output="property3"),
+];
+
+variable_2 = [
+    ("test", output="property"),
+    ("test2", output="property2"),
+];
+
+variable_3 = [
+    1, 2,3, 4
+];
+
+[template.pilot]
+for (a, b, c) in (variable_1, variable_2, variable_3) {
+    test = some/path/ + [a] + .json;
+    test2 = [b.output];
+    test3 = [c];
+    yield ("test.j2", output=[a]+_+[b]+_+[c]);
+}
+
+[commands]
+
+limit 2;
+
+for (a, b) in (variable_1, variable_2) {
+    test = [a.output];
+    test2 = [b.output];
+
+    spawn 
+        ./target/release/test-bed
+        [a.output];
+}

@@ -217,8 +217,8 @@ pub enum TestCommand {
         id: usize,
         command: String,
         args: Vec<Arg>,
-        stdout: OutputMap,
-        stderr: OutputMap,
+        stdout: OutputMap<Arg>,
+        stderr: OutputMap<Arg>,
     },
     Sleep(u64),
     WaitFor {
@@ -290,36 +290,54 @@ impl Arg {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum OutputMap {
-    Print,
-    Create(Arg),
-    Append(Arg),
-}
+// #[derive(Clone, Debug, PartialEq)]
+// pub enum OutputMap<T> {
+//     Print,
+//     Create(T),
+//     Append(T),
+// }
 
-impl OutputMap {
-    pub fn parse(pair: Pair<Rule>) -> Self {
-        let inner = pair.into_inner().next().unwrap();
+// impl<T> OutputMap<T> {
+//     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> OutputMap<U> {
+//         match self {
+//             OutputMap::Print => OutputMap::Print,
+//             OutputMap::Create(value) => OutputMap::Create(f(value)),
+//             OutputMap::Append(value) => OutputMap::Append(f(value)),
+//         }
+//     }
 
-        match inner.as_rule() {
-            Rule::append => {
-                let inner = inner.into_inner().next().unwrap();
-                let arg = Arg::parse(inner);
+//     pub fn map_ref<U>(&self, f: impl FnOnce(&T) -> U) -> OutputMap<U> {
+//         match self {
+//             OutputMap::Print => OutputMap::Print,
+//             OutputMap::Create(value) => OutputMap::Create(f(value)),
+//             OutputMap::Append(value) => OutputMap::Append(f(value)),
+//         }
+//     }
+// }
 
-                OutputMap::Append(arg)
-            }
-            Rule::print => OutputMap::Print,
-            Rule::arg => {
-                let arg = Arg::parse(inner);
-                OutputMap::Create(arg)
-            }
-            _ => unreachable!("{}", inner),
-        }
-    }
-}
+// impl OutputMap<Arg> {
+//     pub fn parse(pair: Pair<Rule>) -> Self {
+//         let inner = pair.into_inner().next().unwrap();
 
-impl Default for OutputMap {
-    fn default() -> Self {
-        Self::Print
-    }
-}
+//         match inner.as_rule() {
+//             Rule::append => {
+//                 let inner = inner.into_inner().next().unwrap();
+//                 let arg = Arg::parse(inner);
+
+//                 OutputMap::Append(arg)
+//             }
+//             Rule::print => OutputMap::Print,
+//             Rule::arg => {
+//                 let arg = Arg::parse(inner);
+//                 OutputMap::Create(arg)
+//             }
+//             _ => unreachable!("{}", inner),
+//         }
+//     }
+// }
+
+// impl<T> Default for OutputMap<T> {
+//     fn default() -> Self {
+//         Self::Print
+//     }
+// }

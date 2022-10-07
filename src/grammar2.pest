@@ -1,0 +1,207 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* ~ "\n" }
+
+main = _{ 
+    SOI 
+    ~
+    includes?  
+    ~
+    template_output?
+    ~
+    (globals)?
+    ~
+    (templates)*
+    ~
+    (commands)
+    ~ 
+    EOI 
+}
+
+includes = {
+    "[includes]" ~ (string_whitespace)*
+}
+
+template_output = {
+    "[output]" ~ string_whitespace
+}
+
+globals = {
+    "[globals]" ~ globals_program
+}
+
+templates = {
+    "[template." ~ ident ~ "]" ~ template_program 
+}
+
+commands = {
+    "[commands]" ~ command_program
+}
+
+// ============ Globals ================
+
+globals_program = {
+    (variable_assignment ~ ";")*
+}
+
+// ============ Globals ================
+
+// ============ Templates ==============
+
+template_program = {
+    (template_expr)*
+}
+
+template_expr = {
+    (template ~ ";") | template_for_loop
+}
+
+template_for_loop = {
+    for_loop ~ "{" ~ (template_expr)* ~ "}"
+}
+
+template = {
+    variable_assignment | 
+    yield_template
+}
+
+yield_template = { 
+    "yield" ~ object
+}
+
+// ============ Templates ==============
+
+
+// ============= Commands ==============
+
+command_program = {
+    (command_expr)*
+}
+
+command_expr = {
+    (command ~ ";") | command_for_loop
+    
+}
+
+command_for_loop = {
+    for_loop ~ "{" ~ (command_expr)* ~ "}"
+}
+
+command = {
+    variable_assignment | 
+    limit_spawn | 
+    sleep | 
+    wait_all | 
+    spawn 
+}
+
+
+limit_spawn = {
+    "limit" ~ integer
+}
+
+sleep = {
+    "sleep" ~ integer
+}
+
+wait_all = {
+    "wait_all" ~ (integer)?
+}
+
+spawn = {
+    "spawn" ~ std_map? ~ string_builder ~ (string_builder)*
+}
+
+std_map = {
+    (stderr_map ~ stdout_map?) | (stdout_map ~ stderr_map?)
+}
+
+stderr_map = {
+    "stderr("
+    ~
+    output_map
+    ~
+    ")"
+}
+
+stdout_map = {
+    "stdout("
+    ~
+    output_map
+    ~
+    ")"
+
+}
+
+output_map = {
+    append | print | string_builder
+}
+
+append = {
+    "append(" ~ string_builder ~ ")"
+}
+
+print = { "print" }
+
+// ============= Commands ==============
+
+for_loop = {
+    for_loop_combinations | for_loop_groups
+}
+
+for_loop_combinations = {
+    ("for" ~ ident ~ "in" ~ ident) | ("for" ~ ident_group ~ "in" ~ ident_group) 
+}
+
+for_loop_groups = {
+    ("for" ~ ident ~ "in" ~ ident) | ("for" ~ "group" ~ ident_group ~ "in" ~ ident_group) 
+}
+
+ident_group = {
+    "(" ~ ident ~ ("," ~ ident)* ~ (",")? ~ ")"
+}
+
+variable_assignment = {
+    (object_assignment | list_assignment)
+}
+
+list_assignment = {
+    ident ~ "=" ~ "[" ~ (object ~ ("," ~ object)* ~ ","?)? ~ "]"
+}
+
+object_assignment = {
+    ident ~ "=" ~ object
+}
+
+variable_access = {
+    ident ~ ("." ~ ident)?
+}
+
+object = {
+    ("(" ~ string_builder ~ ("," ~ property_assignment)* ~ ","? ~ ")") | string_builder
+}
+
+property_assignment = { 
+    ident ~ "=" ~ string_builder
+}
+
+ident = @{ ident_char ~ (ident_char | integer)* }
+ident_char = { ('a'..'z') | ('A'..'Z') | "_" }
+
+integer = @{ ('0'..'9')+ } 
+
+string_builder = {
+    string_expr ~ ("+" ~ string_expr)*
+}
+
+string_expr = {
+    string_whitespace | "[" ~ variable_access ~ "]" | string_no_whitespace
+}
+
+string_no_whitespace = @{ char_no_white_space }
+char_no_white_space = {
+    (!(WHITESPACE | "," | "[" | ";" | "]" | "+" | "\"") ~ ANY)+
+}
+
+string_whitespace = ${ "\"" ~ char_whitespace ~ "\""}
+char_whitespace = @{ ("\\\"" | (!("\"") ~ ANY))* }
+
