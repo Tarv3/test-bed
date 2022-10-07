@@ -47,13 +47,20 @@ impl<'source> TestBed<'source> {
         }
     }
 
-    fn wait_all(&mut self, wait: Option<u64>, shutdown: &crate::program::Shutdown) {
+    fn wait_all(
+        &mut self,
+        wait: Option<u64>,
+        remaining: usize,
+        shutdown: &crate::program::Shutdown,
+    ) {
         let duration = wait.unwrap_or(u64::MAX);
         let duration = Duration::from_millis(duration);
         let now = Instant::now();
+        let mut kill = false;
 
-        while !self.processes.is_empty() && now.elapsed() < duration {
+        while self.processes.len() > remaining && now.elapsed() < duration {
             if shutdown.is_shutdown() {
+                kill = true;
                 break;
             }
             let mut i = 0;
@@ -69,7 +76,9 @@ impl<'source> TestBed<'source> {
             std::thread::sleep(SLEEP_TIME);
         }
 
-        <Self as Executable<Command>>::shutdown(self);
+        if kill {
+            <Self as Executable<Command>>::shutdown(self);
+        }
     }
 }
 
@@ -81,7 +90,7 @@ impl<'source> Executable<Command> for TestBed<'source> {
     }
 
     fn finish(&mut self, _: &mut ProgramState, shutdown: &crate::program::Shutdown) {
-        self.wait_all(None, shutdown);
+        self.wait_all(None, 0, shutdown);
     }
 
     fn execute(
@@ -106,7 +115,7 @@ impl<'source> Executable<Command> for TestBed<'source> {
             Command::Spawn(spawn) => {
                 if let Some(limit) = self.spawn_limit {
                     if self.processes.len() >= limit {
-                        <Self as Executable<Command>>::finish(self, stack, shutdown);
+                        self.wait_all(None, limit, shutdown);
                     }
                 }
 
@@ -121,7 +130,7 @@ impl<'source> Executable<Command> for TestBed<'source> {
                 self.processes.push(process);
             }
             Command::WaitAll(timeout) => {
-                self.wait_all(*timeout, shutdown);
+                self.wait_all(*timeout, 0, shutdown);
             }
         }
     }
