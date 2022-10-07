@@ -216,6 +216,30 @@ impl ProcessInfo {
         }
     }
 
+    pub fn try_wait(&mut self) -> bool {
+        let process = match self.running.as_mut() {
+            Some(process) => process,
+            None => return true,
+        };
+
+        process.bar.inc(1);
+        let status = match process.process.try_wait() {
+            Ok(Some(status)) => status,
+            Ok(None) => return false,
+            Err(e) => {
+                process.bar.set_state(ProcessState::Error(e));
+                return true;
+            }
+        };
+
+        match status.success() {
+            true => process.bar.set_state(ProcessState::Finished),
+            false => process.bar.set_state(ProcessState::Failed(status.code())),
+        }
+
+        true
+    }
+
     pub fn wait_or_terminate(&mut self, wait: Option<Duration>, shutdown: &Shutdown) {
         let mut process = match self.running.take() {
             Some(process) => process,

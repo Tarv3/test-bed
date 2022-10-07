@@ -1,4 +1,7 @@
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use indicatif::{MultiProgress, ProgressDrawTarget};
 
@@ -43,6 +46,31 @@ impl<'source> TestBed<'source> {
             multibar: progress,
         }
     }
+
+    fn wait_all(&mut self, wait: Option<u64>, shutdown: &crate::program::Shutdown) {
+        let duration = wait.unwrap_or(u64::MAX);
+        let duration = Duration::from_millis(duration);
+        let now = Instant::now();
+
+        while !self.processes.is_empty() && now.elapsed() < duration {
+            if shutdown.is_shutdown() {
+                break;
+            }
+            let mut i = 0;
+
+            while i < self.processes.len() {
+                if self.processes[i].try_wait() {
+                    self.processes.swap_remove(i);
+                    continue;
+                }
+                i += 1;
+            }
+
+            std::thread::sleep(SLEEP_TIME);
+        }
+
+        <Self as Executable<Command>>::shutdown(self);
+    }
 }
 
 impl<'source> Executable<Command> for TestBed<'source> {
@@ -53,19 +81,7 @@ impl<'source> Executable<Command> for TestBed<'source> {
     }
 
     fn finish(&mut self, _: &mut ProgramState, shutdown: &crate::program::Shutdown) {
-        let mut kill = false;
-
-        for mut value in self.processes.drain(..) {
-            if shutdown.is_shutdown() {
-                kill = true;
-                break;
-            }
-            value.wait_or_terminate(None, shutdown);
-        }
-
-        if kill {
-            <Self as Executable<Command>>::shutdown(self);
-        }
+        self.wait_all(None, shutdown);
     }
 
     fn execute(
@@ -105,13 +121,7 @@ impl<'source> Executable<Command> for TestBed<'source> {
                 self.processes.push(process);
             }
             Command::WaitAll(timeout) => {
-                let duration = timeout.map(|value| Duration::from_millis(value));
-                for mut value in self.processes.drain(..) {
-                    if shutdown.is_shutdown() {
-                        break;
-                    }
-                    value.wait_or_terminate(duration, shutdown);
-                }
+                self.wait_all(*timeout, shutdown);
             }
         }
     }
