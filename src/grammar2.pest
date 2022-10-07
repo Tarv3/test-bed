@@ -194,12 +194,12 @@ string_builder = {
 }
 
 string_expr = {
-    string_whitespace | "[" ~ variable_access ~ "]" | string_no_whitespace
+    "[" ~ variable_access ~ "]" | string_whitespace | string_no_whitespace
 }
 
 string_no_whitespace = @{ char_no_white_space }
 char_no_white_space = {
-    (!(WHITESPACE | "," | "[" | ";" | "]" | "+" | "\"") ~ ANY)+
+    (!(WHITESPACE | "," | "[" | ";" | "]" | ")" | "(" | "+" | "\"") ~ ANY)+
 }
 
 string_whitespace = ${ "\"" ~ char_whitespace ~ "\""}

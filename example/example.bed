@@ -37,6 +37,7 @@ for (a, b) in (variable_1, variable_2) {
     test2 = [b.output];
 
     spawn 
+        stdout([test] + .json)
         ./target/release/test-bed
         [a.output];
 }
