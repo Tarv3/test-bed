@@ -10,6 +10,7 @@ pub enum OutputMap<T> {
 }
 
 impl<T> OutputMap<T> {
+    #[allow(dead_code)]
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> OutputMap<U> {
         match self {
             OutputMap::Print => OutputMap::Print,

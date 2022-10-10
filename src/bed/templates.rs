@@ -111,20 +111,6 @@ impl<'source> TemplateBuilder<'source> {
     }
 }
 
-pub struct TemplateInstance {
-    pub path: PathBuf,
-    pub inputs: Vec<(VarNameId, String)>,
-}
-
-impl TemplateInstance {
-    pub fn variable_value(&self, id: VarNameId) -> Option<&str> {
-        self.inputs
-            .iter()
-            .find(|(var, _)| *var == id)
-            .map(|(_, value)| value.as_str())
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum TemplateCommand {
     Yield {

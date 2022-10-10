@@ -7,7 +7,7 @@ use std::{
 
 use indexmap::IndexSet;
 
-use crate::bed_v2::expr::VariableExpr;
+use crate::bed::expr::VariableExpr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StackId(pub usize);
@@ -129,6 +129,7 @@ impl Variable {
         }
     }
 
+    #[allow(dead_code)]
     pub fn as_obj(&mut self) -> &mut Object {
         match self {
             Variable::Object(value) => value,
@@ -284,6 +285,7 @@ impl ProgramState {
         self.insert_var(id, var, scope).as_list()
     }
 
+    #[allow(dead_code)]
     pub fn new_obj(&mut self, id: VarNameId, scope: Option<usize>) -> &mut Object {
         let obj = self.obj_cache.pop().unwrap_or(Object {
             base: String::new(),

@@ -240,7 +240,7 @@ impl ProcessInfo {
         true
     }
 
-    pub fn wait_or_terminate(&mut self, wait: Option<Duration>, shutdown: &Shutdown) {
+    pub fn _wait_or_terminate(&mut self, wait: Option<Duration>, shutdown: &Shutdown) {
         let mut process = match self.running.take() {
             Some(process) => process,
             None => return,
@@ -390,7 +390,7 @@ fn read_output<'a, R: BufRead>(reader: &mut R, buf: &'a mut Vec<u8>) -> io::Resu
                 }
                 None => {
                     buf.extend_from_slice(available);
-                    let start = available.len(); 
+                    let start = available.len();
                     (false, start)
                 }
             }
@@ -422,7 +422,7 @@ where
 
         while let Ok(bytes) = read_output(&mut reader, &mut bytes) {
             if bytes.is_empty() {
-                break; 
+                break;
             }
 
             let value = String::from_utf8_lossy(bytes);

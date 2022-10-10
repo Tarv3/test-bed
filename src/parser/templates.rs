@@ -1,5 +1,5 @@
 use crate::{
-    bed_v2::templates::TemplateCommand,
+    bed::templates::TemplateCommand,
     program::{Instruction, Program},
 };
 

@@ -3,17 +3,13 @@ extern crate pest_derive;
 
 use std::sync::mpsc::channel;
 
-use bed_v2::TestBed;
-use parser_v2::parse_test_bed;
-use program::{ProgramState, Shutdown};
-// mod bed;
-// mod parser;
-// mod template;
-pub mod bed_v2;
-mod parser_v2;
+mod bed;
+mod parser;
 mod program;
 
-// use parser::parse_test_bed;
+use bed::TestBed;
+use parser::parse_test_bed;
+use program::{ProgramState, Shutdown};
 
 fn main() {
     let mut args = std::env::args();

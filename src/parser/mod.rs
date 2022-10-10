@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use pest::{iterators::Pair, Parser};
 
 use crate::{
-    bed_v2::{
+    bed::{
         commands::{Command, OutputMap, Spawn},
         expr::{ObjectExpr, StringExpr, StringInstance, VariableExpr},
         templates::TemplateCommand,
@@ -17,7 +17,7 @@ pub mod commands;
 pub mod templates;
 
 #[derive(Parser)]
-#[grammar = "grammar2.pest"]
+#[grammar = "grammar.pest"]
 pub struct TestBedParser;
 
 pub struct Parsed {
