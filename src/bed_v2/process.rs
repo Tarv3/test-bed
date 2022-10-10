@@ -390,14 +390,23 @@ fn read_output<'a, R: BufRead>(reader: &mut R, buf: &'a mut Vec<u8>) -> io::Resu
                 }
                 None => {
                     buf.extend_from_slice(available);
-                    (false, available.len())
+                    let start = available.len(); 
+                    (false, start)
                 }
             }
         };
 
         reader.consume(used);
 
-        if done || used == 0 {
+        if used == 0 {
+            return Ok(buf);
+        }
+
+        if done {
+            if buf.is_empty() {
+                continue;
+            }
+
             return Ok(buf);
         }
     }
@@ -412,6 +421,10 @@ where
         let mut bytes = vec![];
 
         while let Ok(bytes) = read_output(&mut reader, &mut bytes) {
+            if bytes.is_empty() {
+                break; 
+            }
+
             let value = String::from_utf8_lossy(bytes);
             bar.set_message(value.to_string());
         }
