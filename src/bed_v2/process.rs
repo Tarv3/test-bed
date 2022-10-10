@@ -340,6 +340,10 @@ where
             let consumed = available.len();
             reader.consume(consumed);
 
+            if consumed == 0 {
+                break;
+            }
+
             if let Err(e) = writer.write_all(&bytes) {
                 println!("Write Failed {}: {}", path, e);
                 break;
