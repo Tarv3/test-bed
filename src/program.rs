@@ -129,6 +129,14 @@ impl Variable {
         }
     }
 
+    pub fn len(&self) -> Option<usize> {
+        match self {
+            Variable::Ref(_) => None,
+            Variable::Object(_) => Some(1),
+            Variable::List(list) => Some(list.len()),
+        }
+    }
+
     #[allow(dead_code)]
     pub fn as_obj(&mut self) -> &mut Object {
         match self {
@@ -421,7 +429,7 @@ impl<Command> Program<Command> {
                     }
                 }
                 Instruction::StartIter { target, iter, end } => match state.get_value(*target) {
-                    Some((scope, value)) if !value.is_ref() => {
+                    Some((scope, value)) if value.len().is_some() && value.len().unwrap() > 0 => {
                         state.new_ref(*iter, *target, 0, scope, None);
                     }
                     _ => {
@@ -430,12 +438,8 @@ impl<Command> Program<Command> {
                     }
                 },
                 Instruction::Increment { target, iter, end } => {
-                    let len = match state.get_value(*target) {
-                        Some((_, value)) if !value.is_ref() => match value {
-                            Variable::Object(_) => 1,
-                            Variable::List(values) => values.len(),
-                            _ => unreachable!(),
-                        },
+                    let len = match state.get_value(*target).map(|(_, value)| value.len()) {
+                        Some(Some(len)) => len,
                         _ => {
                             counter = **end;
                             continue;

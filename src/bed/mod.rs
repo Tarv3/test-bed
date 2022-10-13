@@ -58,7 +58,7 @@ impl<'source> TestBed<'source> {
         let now = Instant::now();
         let mut kill = false;
 
-        while self.processes.len() > remaining && now.elapsed() < duration {
+        while self.processes.len() >= remaining && now.elapsed() < duration {
             if shutdown.is_shutdown() {
                 kill = true;
                 break;
