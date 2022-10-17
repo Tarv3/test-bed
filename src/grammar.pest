@@ -12,7 +12,7 @@ main = _{
     ~
     (templates)*
     ~
-    (commands)
+    (commands)*
     ~ 
     EOI 
 }
@@ -34,7 +34,7 @@ templates = {
 }
 
 commands = {
-    "[commands]" ~ command_program
+    "[commands" ~ ("." ~ ident)? ~ "]" ~ command_program
 }
 
 // ============ Globals ================

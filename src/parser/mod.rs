@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use pest::{iterators::Pair, Parser};
 
@@ -26,7 +29,8 @@ pub struct Parsed {
     pub output: PathBuf,
     pub globals: Program<TemplateCommand>,
     pub templates: Vec<(VarNameId, Vec<TemplateExpr>)>,
-    pub commands: Vec<CommandExpr>,
+    pub commands: BTreeMap<Option<VarNameId>, Vec<CommandExpr>>,
+    // pub commands: Vec<CommandExpr>,
 }
 
 impl Parsed {
@@ -37,11 +41,21 @@ impl Parsed {
             .collect()
     }
 
-    pub fn commands_program(&mut self) -> Program<Command> {
-        build_commands_program(self.commands.drain(..))
+    pub fn commands_program(&self, name: Option<VarNameId>) -> Option<Program<Command>> {
+        let commands = self.commands.get(&name)?.clone();
+        Some(build_commands_program(commands.into_iter()))
+    }
+
+    pub fn all_programs(&self) -> Vec<Program<Command>> {
+        self.commands
+            .clone()
+            .into_iter()
+            .map(|(_, program)| build_commands_program(program.into_iter()))
+            .collect()
     }
 }
 
+#[derive(Clone)]
 pub struct ForLoop {
     pub ty: ForLoopType,
     pub iters: Vec<VarNameId>,
@@ -174,7 +188,7 @@ pub fn parse_test_bed(file: impl AsRef<Path>) -> Parsed {
     let mut variables = VarNames::default();
     let mut globals = Program(vec![]);
     let mut templates = vec![];
-    let mut commands = vec![];
+    let mut commands = BTreeMap::new();
     let mut includes = vec![];
     let mut output = PathBuf::new();
 
@@ -211,8 +225,24 @@ pub fn parse_test_bed(file: impl AsRef<Path>) -> Parsed {
                 templates.push((ident, program))
             }
             Rule::commands => {
-                let inner = value.into_inner().next().unwrap();
-                commands = parse_command_program(&mut variables, inner);
+                let mut inner = value.into_inner();
+                let next = inner.next().unwrap();
+
+                let (ident, program) = match next.as_rule() {
+                    Rule::ident => {
+                        let ident = parse_ident(&mut variables, next);
+                        let program = inner.next().unwrap();
+                        let program = parse_command_program(&mut variables, program);
+                        (Some(ident), program)
+                    }
+                    Rule::command_program => {
+                        let program = parse_command_program(&mut variables, next);
+                        (None, program)
+                    }
+                    _ => unreachable!(),
+                };
+
+                commands.insert(ident, program);
             }
             Rule::EOI => break,
             _ => {
@@ -349,6 +379,7 @@ pub fn parse_yield_template(variables: &mut VarNames, pair: Pair<Rule>) -> Objec
 
 // ======================= Commands ===========================
 
+#[derive(Clone)]
 pub enum CommandExpr {
     Command(Instruction<Command>),
     ForLoop {
