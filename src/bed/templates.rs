@@ -49,8 +49,8 @@ impl<'source> TemplateBuilder<'source> {
         let template = match self.environment.get_template(&object.base) {
             Ok(template) => template,
             Err(e) => {
-                todo!("Template Error: {e}") 
-            },
+                todo!("Template Error: {e}")
+            }
         };
 
         let output_name = match names.evaluate(output) {

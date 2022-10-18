@@ -57,6 +57,7 @@ impl<'source> TestBed<'source> {
         let duration = Duration::from_millis(duration);
         let now = Instant::now();
         let mut kill = false;
+        let remaining = remaining.max(1);
 
         while self.processes.len() >= remaining && now.elapsed() < duration {
             if shutdown.is_shutdown() {

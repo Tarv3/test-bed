@@ -394,7 +394,6 @@ impl<Command> Program<Command> {
         shutdown: &Shutdown,
     ) {
         let mut counter = 0;
-        state.new_scope();
 
         while counter < self.0.len() {
             if shutdown.is_shutdown() {

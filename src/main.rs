@@ -39,7 +39,7 @@ fn main() {
         commands.push(Some(name));
     }
 
-    let command_programs = match commands.is_empty() {
+    let command_programs = match commands.is_empty() && !run_all {
         true => match parsed.commands_program(None) {
             Some(command) => vec![command],
             None => panic!("No default command to run"),
@@ -82,13 +82,18 @@ fn main() {
 
     std::thread::spawn(move || {
         let mut state = ProgramState::new();
+        state.new_scope();
         globals_program.run(&mut test_bed, &mut state, &shutdown);
         for program in template_programs {
+            state.new_scope();
             program.run(&mut test_bed, &mut state, &shutdown);
+            state.pop_scope();
         }
 
         for program in command_programs {
+            state.new_scope();
             program.run(&mut test_bed, &mut state, &shutdown);
+            state.pop_scope();
         }
 
         send.send(()).ok();
