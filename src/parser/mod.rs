@@ -34,23 +34,36 @@ pub struct Parsed {
 }
 
 impl Parsed {
-    pub fn template_program(&mut self) -> Vec<Program<TemplateCommand>> {
+    pub fn template_program(&self) -> Vec<(String, Program<TemplateCommand>)> {
         self.templates
+            .clone()
             .drain(..)
-            .map(|(_, value)| build_templates_program(value.into_iter()))
+            .map(|(id, value)| {
+                let name = self.names.evaluate(id).unwrap().to_string();
+                let program = build_templates_program(value.into_iter());
+                (name, program)
+            })
             .collect()
     }
 
-    pub fn commands_program(&self, name: Option<VarNameId>) -> Option<Program<Command>> {
+    pub fn commands_program(
+        &self,
+        name: Option<VarNameId>,
+    ) -> Option<(Option<String>, Program<Command>)> {
         let commands = self.commands.get(&name)?.clone();
-        Some(build_commands_program(commands.into_iter()))
+        let name = name.map(|value| self.names.evaluate(value).unwrap().to_string());
+        Some((name, build_commands_program(commands.into_iter())))
     }
 
-    pub fn all_programs(&self) -> Vec<Program<Command>> {
+    pub fn all_programs(&self) -> Vec<(Option<String>, Program<Command>)> {
         self.commands
             .clone()
             .into_iter()
-            .map(|(_, program)| build_commands_program(program.into_iter()))
+            .map(|(id, program)| {
+                let name = id.map(|value| self.names.evaluate(value).unwrap().to_string());
+                let program = build_commands_program(program.into_iter());
+                (name, program)
+            })
             .collect()
     }
 }
@@ -286,6 +299,7 @@ pub fn parse_globals_program<T>(variables: &mut VarNames, pair: Pair<Rule>) -> P
 
 // ======================= Templates ===========================
 
+#[derive(Clone)]
 pub enum TemplateExpr {
     Command(Instruction<TemplateCommand>),
     ForLoop {

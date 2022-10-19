@@ -47,6 +47,13 @@ impl<'source> TestBed<'source> {
         }
     }
 
+    pub fn reset(&mut self, shutdown: &crate::program::Shutdown) {
+        self.wait_all(None, 0, shutdown);
+        self.processes.clear();
+        self.spawn_limit = None;
+        self.multibar = MultiProgress::with_draw_target(ProgressDrawTarget::stdout());
+    }
+
     fn wait_all(
         &mut self,
         wait: Option<u64>,

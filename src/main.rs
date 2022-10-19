@@ -84,16 +84,33 @@ fn main() {
         let mut state = ProgramState::new();
         state.new_scope();
         globals_program.run(&mut test_bed, &mut state, &shutdown);
-        for program in template_programs {
+        for (name, program) in template_programs {
+            test_bed
+                .multibar
+                .println(format!("Building `{name}` Template"))
+                .ok();
+
             state.new_scope();
             program.run(&mut test_bed, &mut state, &shutdown);
             state.pop_scope();
         }
 
-        for program in command_programs {
+        for (name, program) in command_programs {
+            match name {
+                Some(name) => test_bed
+                    .multibar
+                    .println(format!("Running `{name}` Program"))
+                    .ok(),
+                None => test_bed
+                    .multibar
+                    .println(format!("Running Default Program"))
+                    .ok(),
+            };
+
             state.new_scope();
             program.run(&mut test_bed, &mut state, &shutdown);
             state.pop_scope();
+            test_bed.reset(&shutdown);
         }
 
         send.send(()).ok();
