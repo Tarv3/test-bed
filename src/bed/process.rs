@@ -154,6 +154,19 @@ impl ProcessBar {
         self.bar.set_prefix(prefix);
     }
 
+    fn update_message(&self, available: usize, message_len: usize, usage: &mut BarUsage) {
+        usage.message = message_len;
+        let next_usage = usage.message + usage.prefix;
+
+        let mut refresh = next_usage > available;
+        refresh |= next_usage < available && usage.truncated;
+
+        if refresh {
+            let prefix = self.prepare_prefix();
+            self.update_prefix(available, prefix, usage);
+        }
+    }
+
     pub fn set_message(&self, msg: String) {
         {
             let status = &*self.status.lock().unwrap();
@@ -168,16 +181,7 @@ impl ProcessBar {
 
         {
             let mut usage = self.usage.lock().unwrap();
-            usage.message = msg.len();
-            let next_usage = usage.message + usage.prefix;
-
-            let mut refresh = next_usage > available;
-            refresh |= next_usage < available && usage.truncated;
-
-            if refresh {
-                let prefix = self.prepare_prefix();
-                self.update_prefix(available, prefix, &mut usage);
-            }
+            self.update_message(available, msg.len(), &mut usage);
         }
 
         self.bar.set_message(msg);
@@ -192,6 +196,13 @@ impl ProcessBar {
 
         let message = format!("{:?}", state);
         *self.status.lock().unwrap() = state;
+        let available = self.term_cols();
+
+        {
+            let mut usage = self.usage.lock().unwrap();
+            self.update_message(available, message.len(), &mut usage);
+        }
+
         self.bar.finish_with_message(message);
     }
 }
