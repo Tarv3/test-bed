@@ -15,3 +15,4 @@ indicatif = { git = "https://github.com/console-rs/indicatif.git" }
 minijinja = { version = "0.23.0", features=["source"] } 
 indexmap = "1.9"
 memchr = "2.5.0"
+console = "*"

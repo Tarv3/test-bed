@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+use console::Term;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 use crate::program::Shutdown;
@@ -25,13 +26,32 @@ pub enum ProcessState {
     Finished,
 }
 
+#[derive(Clone, Copy)]
+struct BarUsage {
+    truncated: bool,
+    prefix: usize,
+    message: usize,
+}
+
+impl Default for BarUsage {
+    fn default() -> Self {
+        Self {
+            truncated: false,
+            prefix: Default::default(),
+            message: Default::default(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ProcessBar {
     pub bar: ProgressBar,
+    usage: Arc<Mutex<BarUsage>>,
     ident: String,
     stdout: Arc<AtomicBool>,
     stderr: Arc<AtomicBool>,
     status: Arc<Mutex<ProcessState>>,
+    term: Term,
 }
 
 impl ProcessBar {
@@ -46,15 +66,25 @@ impl ProcessBar {
 
         let output = Self {
             bar,
-
+            usage: Arc::new(Mutex::new(BarUsage::default())),
             status: Arc::new(Mutex::new(ProcessState::Running)),
             ident,
             stdout: Arc::new(AtomicBool::new(false)),
             stderr: Arc::new(AtomicBool::new(false)),
+            term: Term::stdout(),
         };
-        output.update_prefix();
+        let available = output.term_cols();
+        let prefix = output.prepare_prefix();
+        {
+            let mut usage = output.usage.lock().unwrap();
+            output.update_prefix(available, prefix, &mut usage);
+        }
 
         output
+    }
+
+    pub fn extra_space(&self) -> usize {
+        3 // spinner + space + space
     }
 
     pub fn inc(&self, delta: u64) {
@@ -69,7 +99,7 @@ impl ProcessBar {
         self.stderr.store(value, Ordering::Release);
     }
 
-    pub fn update_prefix(&self) {
+    pub fn prepare_prefix(&self) -> String {
         let stdout = self.stdout.load(Ordering::Acquire);
         let stderr = self.stderr.load(Ordering::Acquire);
 
@@ -88,16 +118,66 @@ impl ProcessBar {
         if stdout || stderr {
             prefix.push_str(": ");
         }
+
         prefix.push_str(&self.ident);
+
+        prefix
+    }
+
+    fn term_cols(&self) -> usize {
+        let extra = self.extra_space();
+        let (_, cols) = self.term.size();
+        (cols as usize).max(extra) - extra
+    }
+
+    fn update_prefix(&self, available: usize, mut prefix: String, usage: &mut BarUsage) {
+        let next_usage = usage.message + prefix.len();
+        usage.prefix = prefix.len();
+
+        if next_usage > available {
+            usage.truncated = true;
+
+            match usage.message >= available {
+                true => {
+                    usage.prefix = 0;
+                    prefix.truncate(0);
+                }
+                false => {
+                    usage.prefix = available - usage.message;
+                    prefix.truncate(usage.prefix);
+                }
+            }
+        } else {
+            usage.truncated = false;
+        }
+
         self.bar.set_prefix(prefix);
     }
 
     pub fn set_message(&self, msg: String) {
-        let status = &*self.status.lock().unwrap();
+        {
+            let status = &*self.status.lock().unwrap();
 
-        match status {
-            ProcessState::Running => {}
-            _ => return,
+            match status {
+                ProcessState::Running => {}
+                _ => return,
+            }
+        }
+
+        let available = self.term_cols();
+
+        {
+            let mut usage = self.usage.lock().unwrap();
+            usage.message = msg.len();
+            let next_usage = usage.message + usage.prefix;
+
+            let mut refresh = next_usage > available;
+            refresh |= next_usage < available && usage.truncated;
+
+            if refresh {
+                let prefix = self.prepare_prefix();
+                self.update_prefix(available, prefix, &mut usage);
+            }
         }
 
         self.bar.set_message(msg);
@@ -151,11 +231,13 @@ impl ProcessInfo {
     }
 
     pub fn run(&mut self, multibar: &MultiProgress, args: usize) -> io::Result<()> {
-        let mut ident = self.command.clone();
+        let pat = ['/', '\\'];
+
+        let mut ident = self.command.split(pat).last().unwrap_or("?").to_string();
         let args = args.min(self.args.len());
 
         for i in 0..args {
-            let arg = &self.args[i];
+            let arg = &self.args[i].split(pat).last().unwrap_or("?").to_string();
             ident.push(' ');
             ident.push_str(arg);
         }
@@ -355,63 +437,6 @@ where
     Ok(())
 }
 
-fn read_output<'a, R: BufRead>(reader: &mut R, buf: &'a mut Vec<u8>) -> io::Result<&'a [u8]> {
-    buf.clear();
-
-    let find_delimiters = |bytes: &[u8]| -> Option<(usize, usize)> {
-        let newline = b'\n';
-        let c_return = b'\r';
-
-        let first = memchr::memchr2(newline, c_return, bytes)?;
-        let mut end = first + 1;
-
-        while end < bytes.len() {
-            if bytes[end] == newline || bytes[end] == c_return {
-                break;
-            }
-            end += 1;
-        }
-
-        Some((first, end))
-    };
-
-    loop {
-        let (done, used) = {
-            let available = match reader.fill_buf() {
-                Ok(n) => n,
-                Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e),
-            };
-
-            match find_delimiters(available) {
-                Some((start, end)) => {
-                    buf.extend_from_slice(&available[..start]);
-                    (true, end)
-                }
-                None => {
-                    buf.extend_from_slice(available);
-                    let start = available.len();
-                    (false, start)
-                }
-            }
-        };
-
-        reader.consume(used);
-
-        if used == 0 {
-            return Ok(buf);
-        }
-
-        if done {
-            if buf.is_empty() {
-                continue;
-            }
-
-            return Ok(buf);
-        }
-    }
-}
-
 fn spawn_progress_writer<R: Read + Send>(reader: R, bar: ProcessBar)
 where
     R: Read + Send + 'static,
@@ -419,13 +444,41 @@ where
     std::thread::spawn(move || {
         let mut reader = BufReader::new(reader);
         let mut bytes = vec![];
+        // let mut output = String::new();
+        let mut clear = false;
 
-        while let Ok(bytes) = read_output(&mut reader, &mut bytes) {
-            if bytes.is_empty() {
+        loop {
+            let available = match reader.fill_buf() {
+                Ok(n) => n,
+                Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    bar.set_message(format!("Error: {e}"));
+                    break;
+                }
+            };
+
+            let used = available.len();
+
+            if used == 0 {
                 break;
             }
 
-            let value = String::from_utf8_lossy(bytes);
+            for &byte in available.iter() {
+                if byte == b'\n' || byte == b'\r' {
+                    clear = true;
+                    continue;
+                }
+
+                if clear {
+                    bytes.clear();
+                    clear = false;
+                }
+
+                bytes.push(byte);
+            }
+
+            reader.consume(used);
+            let value = String::from_utf8_lossy(&bytes);
             bar.set_message(value.to_string());
         }
     });
