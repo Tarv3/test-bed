@@ -25,7 +25,7 @@ fn main() {
     let mut parsed = parse_test_bed(commands);
     let mut commands = vec![];
     let mut run_all = false;
-    let mut debug = true;
+    let mut debug = false;
 
     while let Some(value) = args.next() {
         match value.as_str() {
@@ -118,7 +118,7 @@ fn main() {
                     .println(format!("Running Default Program"))
                     .ok(),
             };
-            
+
             if debug {
                 println!("{program}");
             }
