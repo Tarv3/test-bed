@@ -25,18 +25,27 @@ fn main() {
     let mut parsed = parse_test_bed(commands);
     let mut commands = vec![];
     let mut run_all = false;
+    let mut debug = true;
 
     while let Some(value) = args.next() {
-        if &value == "--all" {
-            run_all = true;
-            break;
-        } else if &value == "." {
-            commands.push(None);
-            continue;
+        match value.as_str() {
+            "--all" => {
+                run_all = true;
+                break;
+            }
+            "--debug" => {
+                debug = true;
+                continue;
+            }
+            "." => {
+                commands.push(None);
+                continue;
+            }
+            x => {
+                let id = parsed.names.replace(x);
+                commands.push(Some(id));
+            }
         }
-
-        let name = parsed.names.replace(&value);
-        commands.push(Some(name));
     }
 
     let command_programs = match commands.is_empty() && !run_all {
@@ -90,6 +99,9 @@ fn main() {
                 .println(format!("Building `{name}` Template"))
                 .ok();
 
+            if debug {
+                println!("{program}");
+            }
             state.new_scope();
             program.run(&mut test_bed, &mut state, &shutdown);
             state.pop_scope();
@@ -106,6 +118,10 @@ fn main() {
                     .println(format!("Running Default Program"))
                     .ok(),
             };
+            
+            if debug {
+                println!("{program}");
+            }
 
             state.new_scope();
             program.run(&mut test_bed, &mut state, &shutdown);
