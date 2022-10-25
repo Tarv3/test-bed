@@ -1,4 +1,4 @@
-use crate::program::ProgramState;
+use crate::program::{ProgramState, VarFieldId, VarIter};
 
 use super::{expr::StringExpr, process::ProcessInfo};
 
@@ -29,9 +29,33 @@ impl<T> OutputMap<T> {
 }
 
 #[derive(Clone, Debug)]
+pub enum ArgBuilder {
+    String(StringExpr),
+    Set(VarFieldId),
+}
+
+impl ArgBuilder {
+    pub fn evaluate<'a>(&'a self, state: &'a ProgramState) -> impl Iterator<Item = String> + 'a {
+        match self {
+            ArgBuilder::String(value) => VarIter::Single(value.evaluate(state)),
+            ArgBuilder::Set(value) => VarIter::List(state.get_var(value.var).map(move |object| {
+                match value.field {
+                    Some(field) => object
+                        .properties
+                        .get(&field)
+                        .cloned()
+                        .unwrap_or(String::new()),
+                    None => object.base.clone(),
+                }
+            })),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Spawn {
     pub command: StringExpr,
-    pub args: Vec<StringExpr>,
+    pub args: Vec<ArgBuilder>,
     pub stdout: OutputMap<StringExpr>,
     pub stderr: OutputMap<StringExpr>,
 }
@@ -42,7 +66,7 @@ impl Spawn {
         let mut process = ProcessInfo::new(command);
 
         process
-            .add_args(self.args.iter().map(|arg| arg.evaluate(state)))
+            .add_args(self.args.iter().flat_map(|arg| arg.evaluate(state)))
             .set_stdout(self.stdout.map_ref(|value| value.evaluate(state).into()))
             .set_stderr(self.stderr.map_ref(|value| value.evaluate(state).into()));
 

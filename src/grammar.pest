@@ -60,12 +60,33 @@ template_for_loop = {
 }
 
 template = {
-    variable_assignment | 
+    build_assignment |
     yield_template
 }
 
+build_assignment = {
+    ident ~ "=" ~ build_object
+}
+
 yield_template = { 
-    "yield" ~ object
+    "yield" ~ build_object
+}
+
+build_object = {
+    ("(" ~ build_string_expr ~ ("," ~ build_property_assignment)* ~ ","? ~ ")") | build_string_expr
+}
+
+build_property_assignment = {
+    ident ~ "=" ~ build_string_expr
+}
+
+build_string_expr = {
+    build_fn | 
+    string_builder
+}
+
+build_fn = {
+    "build" ~ "(" ~ string_builder ~ "," ~ string_builder ~ ")"
 }
 
 // ============ Templates ==============
@@ -108,7 +129,7 @@ wait_all = {
 }
 
 spawn = {
-    "spawn" ~ std_map? ~ string_builder ~ (string_builder)*
+    "spawn" ~ std_map? ~ string_builder ~ (arg_builder)*
 }
 
 std_map = {
@@ -141,6 +162,10 @@ append = {
 }
 
 print = { "print" }
+
+arg_builder = {
+   "{" ~ variable_access ~ "}" | string_builder 
+}
 
 // ============= Commands ==============
 

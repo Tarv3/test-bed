@@ -5,12 +5,12 @@ use std::{
 
 use indicatif::{MultiProgress, ProgressDrawTarget};
 
-use crate::program::{Executable, ProgramState, VarNames};
+use crate::program::{Executable, ProgramState, VarNames, Variable};
 
 use self::{
     commands::Command,
     process::ProcessInfo,
-    templates::{TemplateBuilder, TemplateCommand},
+    templates::{yield_value, TemplateBuilder, TemplateCommand},
 };
 
 pub mod commands;
@@ -155,12 +155,29 @@ impl<'source> Executable<TemplateCommand> for TestBed<'source> {
         state: &mut ProgramState,
         _: &crate::program::Shutdown,
     ) {
-        match command {
-            TemplateCommand::Yield { output, object } => {
-                let object = object.evaluate(state);
-                self.templates
-                    .build(*output, object, state, &self.var_names);
+        let err = match command {
+            TemplateCommand::BuildAssign { output, object } => {
+                match object.evaluate(state, &mut self.templates, &self.var_names) {
+                    Ok(object) => {
+                        state.insert_var(*output, Variable::Object(object), None);
+                        return;
+                    }
+                    Err(e) => e,
+                }
             }
-        }
+
+            TemplateCommand::Yield { output, object } => {
+                match object.evaluate(state, &mut self.templates, &self.var_names) {
+                    Ok(object) => {
+                        yield_value(*output, object, state);
+                        return;
+                    }
+                    Err(e) => e,
+                }
+            }
+        };
+
+        self.multibar.println(format!("{err}")).unwrap();
+        return;
     }
 }

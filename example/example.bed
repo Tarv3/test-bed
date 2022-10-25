@@ -17,7 +17,7 @@ variable_2 = [
 ];
 
 variable_3 = [
-    1, 2,3, 4
+    1, 2, 3, 4
 ];
 
 [template.pilot]
@@ -25,7 +25,7 @@ for (a, b, c) in (variable_1, variable_2, variable_3) {
     test = some/path/ + [a] + .json;
     test2 = [b.output];
     test3 = [c];
-    yield ("test.j2", output=[a]+_+[b]+_+[c]);
+    yield (build("test.j2", [a]+[b.output]+[c] + .json), output=[a]+_+[b]+_+[c]);
 }
 
 [commands]
@@ -37,7 +37,7 @@ for (a, b) in (variable_1, variable_2) {
     test2 = [b.output];
 
     spawn 
-        stdout([test] + .json)
+        stdout(example/out/ + [test] + .json)
         ./target/release/test-bed
         [a.output];
 }

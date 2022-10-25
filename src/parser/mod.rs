@@ -7,9 +7,9 @@ use pest::{iterators::Pair, Parser};
 
 use crate::{
     bed::{
-        commands::{Command, OutputMap, Spawn},
+        commands::{ArgBuilder, Command, OutputMap, Spawn},
         expr::{ObjectExpr, StringExpr, StringInstance, VariableExpr},
-        templates::TemplateCommand,
+        templates::{BuildObjectExpr, BuildStringExpr, TemplateCommand},
     },
     program::{Instruction, InstructionId, Program, VarFieldId, VarNameId, VarNames},
 };
@@ -363,14 +363,9 @@ pub fn parse_template(
     let inner = pair.into_inner().next().unwrap();
 
     match inner.as_rule() {
-        Rule::variable_assignment => {
-            let (target, value) = parse_variable_assignment(variables, inner);
-
-            Instruction::AssignVar {
-                target,
-                scope: None,
-                value,
-            }
+        Rule::build_assignment => {
+            let (output, object) = parse_build_assignment(variables, inner);
+            Instruction::Command(TemplateCommand::BuildAssign { output, object })
         }
         Rule::yield_template => {
             let yield_object = parse_yield_template(variables, inner);
@@ -384,10 +379,71 @@ pub fn parse_template(
     }
 }
 
-pub fn parse_yield_template(variables: &mut VarNames, pair: Pair<Rule>) -> ObjectExpr {
-    let inner = pair.into_inner().next().unwrap();
-    parse_object(variables, inner)
+pub fn parse_build_assignment(
+    variables: &mut VarNames,
+    pair: Pair<Rule>,
+) -> (VarNameId, BuildObjectExpr) {
+    let mut inner = pair.into_inner();
+    let ident = parse_ident(variables, inner.next().unwrap());
+    let object = parse_build_object(variables, inner.next().unwrap());
+
+    (ident, object)
 }
+
+pub fn parse_yield_template(variables: &mut VarNames, pair: Pair<Rule>) -> BuildObjectExpr {
+    let inner = pair.into_inner().next().unwrap();
+    parse_build_object(variables, inner)
+}
+
+pub fn parse_build_object(variables: &mut VarNames, pair: Pair<Rule>) -> BuildObjectExpr {
+    let mut inner = pair.into_inner();
+    let base = parse_build_string_expr(variables, inner.next().unwrap());
+    let mut object = BuildObjectExpr::new(base);
+
+    for value in inner {
+        let (id, expr) = parse_build_property_assignment(variables, value);
+        object.properties.insert(id, expr);
+    }
+
+    object
+}
+
+pub fn parse_build_property_assignment(
+    variables: &mut VarNames,
+    pair: Pair<Rule>,
+) -> (VarNameId, BuildStringExpr) {
+    let mut inner = pair.into_inner();
+    let ident = parse_ident(variables, inner.next().unwrap());
+    let expr = parse_build_string_expr(variables, inner.next().unwrap());
+
+    (ident, expr)
+}
+
+pub fn parse_build_string_expr(variables: &mut VarNames, pair: Pair<Rule>) -> BuildStringExpr {
+    let inner = pair.into_inner().next().unwrap();
+
+    match inner.as_rule() {
+        Rule::string_builder => BuildStringExpr::String(parse_string_builder(variables, inner)),
+        Rule::build_fn => {
+            let (template, name) = parse_build_fn(variables, inner);
+            BuildStringExpr::Build(template, name)
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn parse_build_fn(variables: &mut VarNames, pair: Pair<Rule>) -> (StringExpr, StringExpr) {
+    let mut inner = pair.into_inner();
+    let template = inner.next().unwrap();
+    let template = parse_string_builder(variables, template);
+
+    let name = inner.next().unwrap();
+    let name = parse_string_builder(variables, name);
+
+    (template, name)
+}
+
+// pub fn parse_template_object(variables: &mut VarNames, pair: Pair<Rule>) ->
 
 // ======================= Templates ===========================
 
@@ -515,7 +571,7 @@ pub fn parse_spawn(variables: &mut VarNames, pair: Pair<Rule>) -> Spawn {
     let mut args = vec![];
 
     for value in inner {
-        args.push(parse_string_builder(variables, value));
+        args.push(parse_arg_builder(variables, value));
     }
 
     Spawn {
@@ -523,6 +579,15 @@ pub fn parse_spawn(variables: &mut VarNames, pair: Pair<Rule>) -> Spawn {
         args,
         stdout: out,
         stderr: err,
+    }
+}
+
+pub fn parse_arg_builder(variables: &mut VarNames, pair: Pair<Rule>) -> ArgBuilder {
+    let inner = pair.into_inner().next().unwrap();
+    match inner.as_rule() {
+        Rule::string_builder => ArgBuilder::String(parse_string_builder(variables, inner)),
+        Rule::variable_access => ArgBuilder::Set(parse_variable_access(variables, inner)),
+        _ => unreachable!(),
     }
 }
 

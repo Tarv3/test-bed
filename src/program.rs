@@ -175,6 +175,42 @@ impl VarFieldId {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum VarIter<I, T>
+where
+    I: Iterator<Item = T>,
+{
+    Single(T),
+    List(I),
+    None,
+}
+
+impl<I, T> Iterator for VarIter<I, T>
+where
+    I: Iterator<Item = T>,
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let value = std::mem::replace(self, VarIter::None);
+
+        match value {
+            VarIter::Single(value) => {
+                let to_return = value;
+                Some(to_return)
+            }
+            VarIter::List(mut value) => {
+                let next = value.next();
+                if next.is_some() {
+                    *self = VarIter::List(value);
+                }
+                next
+            }
+            VarIter::None => None,
+        }
+    }
+}
+
 pub struct ProgramState {
     pub scopes: Vec<Scope>,
 
@@ -243,6 +279,33 @@ impl ProgramState {
         match id.field {
             Some(field) => object.properties.get(&field).map(|value| value.as_str()),
             None => Some(&object.base),
+        }
+    }
+
+    pub fn get_var<'a>(&'a self, id: VarNameId) -> impl Iterator<Item = &'a Object> {
+        let (_, mut variable) = match self.get_value(id) {
+            Some(value) => value,
+            None => return VarIter::None,
+        };
+
+        while let Variable::Ref(value) = variable {
+            let scope = &self.scopes[value.scope];
+            variable = match scope.0.get(&value.target) {
+                Some(value) => value,
+                None => return VarIter::None,
+            };
+
+            match variable {
+                Variable::Object(object) => return VarIter::Single(object),
+                Variable::List(list) => return VarIter::List(list.iter()),
+                Variable::Ref(_) => {}
+            }
+        }
+
+        match variable {
+            Variable::Object(object) => VarIter::Single(object),
+            Variable::List(list) => VarIter::List(list.iter()),
+            Variable::Ref(_) => unreachable!(),
         }
     }
 
