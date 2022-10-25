@@ -177,7 +177,7 @@ impl<'source> Executable<TemplateCommand> for TestBed<'source> {
             }
         };
 
-        self.multibar.println(format!("{err}")).unwrap();
+        println!("{err}\n");
         return;
     }
 }

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, path::PathBuf};
+use std::{collections::HashMap, fmt::Display, io::ErrorKind, path::PathBuf};
 
 use minijinja::{Environment, Source};
 
@@ -138,6 +138,20 @@ impl<'source> TemplateBuilder<'source> {
                 })
             }
         };
+
+        if let Some(parent) = output_file.parent() {
+            match std::fs::create_dir_all(parent) {
+                Ok(_) => {}
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+                Err(e) => {
+                    return Err(TemplateBuildError {
+                        template_path,
+                        output_path,
+                        error: TemplateErrorType::WriteError(e),
+                    })
+                }
+            }
+        }
 
         if let Err(e) = std::fs::write(&output_file, rendered) {
             return Err(TemplateBuildError {
