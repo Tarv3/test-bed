@@ -241,14 +241,12 @@ impl ProcessInfo {
         self
     }
 
-    pub fn run(&mut self, multibar: &MultiProgress, args: usize) -> io::Result<()> {
+    pub fn run(&mut self, multibar: &MultiProgress) -> io::Result<()> {
         let pat = ['/', '\\'];
 
         let mut ident = self.command.split(pat).last().unwrap_or("?").to_string();
-        let args = args.min(self.args.len());
 
-        for i in 0..args {
-            let arg = &self.args[i].split(pat).last().unwrap_or("?").to_string();
+        for arg in self.args.iter() {
             ident.push(' ');
             ident.push_str(arg);
         }
