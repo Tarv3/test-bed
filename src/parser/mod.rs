@@ -367,6 +367,10 @@ pub fn parse_template(
             let (output, object) = parse_build_assignment(variables, inner);
             Instruction::Command(TemplateCommand::BuildAssign { output, object })
         }
+        Rule::push => {
+            let (target, object) = parse_push(variables, inner);
+            Instruction::PushList { target, object }
+        }
         Rule::yield_template => {
             let yield_object = parse_yield_template(variables, inner);
 
@@ -507,6 +511,10 @@ pub fn parse_command(variables: &mut VarNames, pair: Pair<Rule>) -> Instruction<
                 scope: None,
                 value,
             }
+        }
+        Rule::push => {
+            let (target, object) = parse_push(variables, inner);
+            Instruction::PushList { target, object }
         }
         Rule::limit_spawn => {
             let limit = parse_limit_spawn(inner);
@@ -714,6 +722,17 @@ pub fn parse_variable_assignment(
             unreachable!()
         }
     }
+}
+
+pub fn parse_push(variables: &mut VarNames, pair: Pair<Rule>) -> (VarNameId, ObjectExpr) {
+    let mut inner = pair.into_inner();
+    let ident = inner.next().unwrap();
+    let ident = parse_ident(variables, ident);
+
+    let object = inner.next().unwrap();
+    let object = parse_object(variables, object);
+
+    (ident, object)
 }
 
 pub fn parse_list_assignment(

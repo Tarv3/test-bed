@@ -61,6 +61,7 @@ template_for_loop = {
 
 template = {
     build_assignment |
+    push | 
     yield_template
 }
 
@@ -109,6 +110,7 @@ command_for_loop = {
 
 command = {
     variable_assignment | 
+    push | 
     limit_spawn | 
     sleep | 
     wait_all | 
@@ -187,6 +189,10 @@ ident_group = {
 
 variable_assignment = {
     (object_assignment | list_assignment)
+}
+
+push = {
+    ident ~ "." ~ "push" ~ "(" ~ object ~ ")" 
 }
 
 list_assignment = {

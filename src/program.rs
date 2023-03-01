@@ -7,7 +7,7 @@ use std::{
 
 use indexmap::IndexSet;
 
-use crate::bed::expr::VariableExpr;
+use crate::bed::expr::{ObjectExpr, VariableExpr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StackId(pub usize);
@@ -134,6 +134,20 @@ impl Variable {
             Variable::Ref(_) => None,
             Variable::Object(_) => Some(1),
             Variable::List(list) => Some(list.len()),
+        }
+    }
+
+    pub fn is_list(&self) -> bool {
+        match self {
+            Variable::List(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn take_obj(self) -> Object {
+        match self {
+            Variable::Object(value) => value,
+            _ => panic!("Tried to get non-object value as Object"),
         }
     }
 
@@ -417,6 +431,10 @@ pub trait Executable<Command> {
 pub enum Instruction<T> {
     PushScope,
     PopScope,
+    PushList {
+        target: VarNameId,
+        object: ObjectExpr,
+    },
     AssignVar {
         target: VarNameId,
         scope: Option<usize>,
@@ -472,6 +490,25 @@ impl<Command> Program<Command> {
                 }
                 Instruction::PopScope => {
                     state.pop_scope();
+                }
+                Instruction::PushList { target, object } => {
+                    let object = object.evaluate(state);
+                    match state.get_value_mut(*target) {
+                        Some(Variable::Ref(_)) => panic!("Tried to push to reference variable"),
+                        Some(variable) => {
+                            if !variable.is_list() {
+                                let mut new_var = Variable::List(vec![]);
+                                std::mem::swap(variable, &mut new_var);
+                                let object = new_var.take_obj();
+                                variable.as_list().push(object);
+                            }
+
+                            variable.as_list().push(object);
+                        }
+                        None => {
+                            state.insert_var(*target, Variable::Object(object), None);
+                        }
+                    }
                 }
                 Instruction::AssignVar {
                     target,
