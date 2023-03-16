@@ -204,7 +204,11 @@ object_assignment = {
 }
 
 variable_access = {
-    ident ~ ("." ~ ident)?
+    ident ~ ("[" ~ variable_idx ~ "]")? ~ ( "." ~ ident)?
+}
+
+variable_idx = {
+    integer | variable_access
 }
 
 object = {

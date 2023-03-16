@@ -21,6 +21,9 @@ variable_3 = [
 ];
 
 [template.pilot]
+value = [variable_1[0].name];
+value = [variable_1[variable_3[variable_3[2]]]];
+value2 = [variable_1];
 for (a, b, c) in (variable_1, variable_2, variable_3) {
     test = some/path/ + [a] + .json;
     test2 = [b.output];
@@ -29,8 +32,8 @@ for (a, b, c) in (variable_1, variable_2, variable_3) {
 }
 
 [commands]
-
 limit 2;
+value = [variable_2[1].hello];
 
 for (a, b) in (variable_1, variable_2) {
     test = [a.output];

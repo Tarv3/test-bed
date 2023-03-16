@@ -177,15 +177,26 @@ impl Variable {
 #[derive(Clone, Debug)]
 pub struct Scope(pub HashMap<VarNameId, Variable>);
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
+pub enum VariableIdx {
+    Integer(usize),
+    Variable(VarFieldId),
+}
+
+#[derive(Clone, Debug)]
 pub struct VarFieldId {
     pub var: VarNameId,
+    pub idx: Option<Box<VariableIdx>>,
     pub field: Option<VarNameId>,
 }
 
 impl VarFieldId {
     pub fn new(var: VarNameId) -> Self {
-        Self { var, field: None }
+        Self {
+            var,
+            idx: None,
+            field: None,
+        }
     }
 }
 
@@ -268,10 +279,14 @@ impl ProgramState {
         }
     }
 
-    pub fn get_object(&self, id: VarNameId) -> Option<&Object> {
+    pub fn get_object(&self, id: VarNameId, idx: Option<usize>) -> Option<&Object> {
         let (_, mut variable) = self.get_value(id)?;
 
         while let Variable::Ref(value) = variable {
+            if idx.is_some() {
+                panic!("Tried to index into a reference");
+            }
+
             let scope = &self.scopes[value.scope];
             variable = scope.0.get(&value.target)?;
 
@@ -281,14 +296,36 @@ impl ProgramState {
         }
 
         match variable {
-            Variable::Object(value) => Some(value),
-            Variable::List(list) => list.first(),
+            Variable::Object(value) => {
+                if idx.is_some() {
+                    panic!("Tried to index into an object");
+                }
+                Some(value)
+            }
+            Variable::List(list) => {
+                let idx = idx.unwrap_or(0);
+                list.get(idx)
+            }
             _ => unreachable!(),
         }
     }
 
-    pub fn get_field(&self, id: VarFieldId) -> Option<&str> {
-        let object = self.get_object(id.var)?;
+    pub fn get_field(&self, id: &VarFieldId) -> Option<&str> {
+        let idx = match &id.idx {
+            Some(value) => match value.as_ref() {
+                VariableIdx::Integer(idx) => Some(*idx),
+                VariableIdx::Variable(id) => {
+                    let value = self.get_field(id)?;
+                    match value.parse() {
+                        Ok(idx) => Some(idx),
+                        Err(_) => panic!("List cannot be indexed by {value}",),
+                    }
+                }
+            },
+            None => None,
+        };
+
+        let object = self.get_object(id.var, idx)?;
 
         match id.field {
             Some(field) => object.properties.get(&field).map(|value| value.as_str()),

@@ -11,7 +11,7 @@ use crate::{
         expr::{ObjectExpr, StringExpr, StringInstance, VariableExpr},
         templates::{BuildObjectExpr, BuildStringExpr, TemplateCommand},
     },
-    program::{Instruction, InstructionId, Program, VarFieldId, VarNameId, VarNames},
+    program::{Instruction, InstructionId, Program, VarFieldId, VarNameId, VarNames, VariableIdx},
 };
 
 use self::{commands::build_commands_program, templates::build_templates_program};
@@ -835,13 +835,38 @@ pub fn parse_string_instance(variables: &mut VarNames, pair: Pair<Rule>) -> Stri
 pub fn parse_variable_access(variables: &mut VarNames, pair: Pair<Rule>) -> VarFieldId {
     let mut inner = pair.into_inner();
     let variable = inner.next().unwrap();
-    let variable = parse_ident(variables, variable);
-    let mut access = VarFieldId::new(variable);
+    let ident = parse_ident(variables, variable);
+    let mut access = VarFieldId::new(ident);
 
-    if let Some(value) = inner.next() {
-        let field = parse_ident(variables, value);
-        access.field = Some(field);
+    for value in inner {
+        match value.as_rule() {
+            Rule::variable_idx => {
+                access.idx = Some(Box::new(parse_variable_idx(variables, value)));
+            }
+            Rule::ident => {
+                let field = parse_ident(variables, value);
+                access.field = Some(field);
+            }
+            _ => unreachable!(),
+        }
     }
 
     access
+}
+
+pub fn parse_variable_idx(variables: &mut VarNames, pair: Pair<Rule>) -> VariableIdx {
+    let mut inner = pair.into_inner();
+    let idx = inner.next().unwrap();
+
+    match idx.as_rule() {
+        Rule::integer => {
+            let idx = idx.as_str().parse().unwrap();
+            VariableIdx::Integer(idx)
+        }
+        Rule::variable_access => {
+            let access = parse_variable_access(variables, idx);
+            VariableIdx::Variable(access)
+        }
+        _ => unreachable!(),
+    }
 }

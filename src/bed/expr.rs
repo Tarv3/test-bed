@@ -19,7 +19,7 @@ impl StringExpr {
             match value {
                 StringInstance::String(value) => output.push_str(value),
                 StringInstance::Variable(var) => {
-                    if let Some(value) = state.get_field(*var) {
+                    if let Some(value) = state.get_field(var) {
                         output.push_str(value);
                     }
                 }
