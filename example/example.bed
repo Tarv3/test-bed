@@ -6,14 +6,14 @@
 
 [globals]
 variable_1 = [
-    ("test\"", output="property"),
-    ("test2", output="property2\""),
-    ("test3", output="property3"),
+    ("1", output="property"),
+    ("2", output="property2\""),
+    ("3", output="property3"),
 ];
 
 variable_2 = [
-    ("test", output="property"),
-    ("test2", output="property2"),
+    ("1", output="property"),
+    ("2", output="property2"),
 ];
 
 variable_3 = [
@@ -39,13 +39,15 @@ for (a, b) in (variable_1, variable_2) {
     test = [a.output];
     test2 = [b.output];
 
-    for c in variable_3 {
-        sleep 500;
-
+    for zeta in variable_3 {
+        // sleep 100;
+        spawn 
+            stdout(example/out/ + [test] + .json)
+            ./target/release/test-bed
+            a [a]
+            b [b]
+            zeta [zeta]
+            ;
     }
 
-    // spawn 
-    //     stdout(example/out/ + [test] + .json)
-    //     ./target/release/test-bed
-    //     [a.output];
 }

@@ -141,7 +141,7 @@ impl<'source> Executable<Command> for TestBed<'source> {
                 }
 
                 let mut process = spawn.evaluate(stack);
-                if let Err(e) = process.run(&self.multibar) {
+                if let Err(e) = process.run(self.iters.len(), &self.multibar) {
                     self.multibar
                         .println(&format!("Failed to spawn {}: {e}", process.command))
                         .ok();

@@ -9,7 +9,7 @@ impl IterProgress {
         let bar = ProgressBar::new(len);
         bar.set_style(
             ProgressStyle::default_bar()
-                .template("{prefix:.bold.dim} [{bar}] {pos}/{len} {eta} : {elapsed_precise}")
+                .template("{prefix:<10.bold.dim} [{bar}] {pos}/{len} {eta} : {elapsed_precise}")
                 .unwrap()
                 .progress_chars("== "),
         );

@@ -55,14 +55,14 @@ pub struct ProcessBar {
 }
 
 impl ProcessBar {
-    pub fn new(multibar: &MultiProgress, ident: String) -> Self {
+    pub fn new(idx: usize, multibar: &MultiProgress, ident: String) -> Self {
         let bar = ProgressBar::new_spinner();
         bar.set_style(
             ProgressStyle::default_spinner()
                 .template("{spinner} {prefix:.bold.dim} {wide_msg}")
                 .unwrap(),
         );
-        let bar = multibar.add(bar);
+        let bar = multibar.insert_from_back(idx, bar);
 
         let output = Self {
             bar,
@@ -241,7 +241,7 @@ impl ProcessInfo {
         self
     }
 
-    pub fn run(&mut self, multibar: &MultiProgress) -> io::Result<()> {
+    pub fn run(&mut self, idx: usize, multibar: &MultiProgress) -> io::Result<()> {
         let pat = ['/', '\\'];
 
         let mut ident = self.command.split(pat).last().unwrap_or("?").to_string();
@@ -251,7 +251,7 @@ impl ProcessInfo {
             ident.push_str(arg);
         }
 
-        let bar = ProcessBar::new(multibar, ident);
+        let bar = ProcessBar::new(idx, multibar, ident);
 
         let mut process = Command::new(&self.command);
         process.args(self.args.iter());
