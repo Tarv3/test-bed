@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    io::{Seek, Write},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -29,8 +29,10 @@ pub struct TestBed<'source> {
 
     pub spawn_limit: Option<usize>,
     pub processes: Vec<ProcessInfo>,
-    pub iters: HashMap<VarNameId, IterProgress>,
+    pub iters: Vec<(VarNameId, IterProgress)>,
     pub multibar: MultiProgress,
+
+    progress_file: Option<std::fs::File>,
 }
 
 impl<'source> TestBed<'source> {
@@ -42,13 +44,27 @@ impl<'source> TestBed<'source> {
         let templates = TemplateBuilder::new(template_output, template_includes);
         let progress = MultiProgress::with_draw_target(ProgressDrawTarget::stdout());
 
+        let progress_file = std::env::var("BED_PROGRESS").ok().map(|file| {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(&file)
+            {
+                Ok(file) => file,
+                Err(e) => {
+                    panic!("Failed to create file `{file}`: {e}");
+                }
+            }
+        });
+
         Self {
             templates,
             var_names,
             spawn_limit: None,
             processes: vec![],
-            iters: HashMap::new(),
+            iters: vec![],
             multibar: progress,
+            progress_file,
         }
     }
 
@@ -93,6 +109,28 @@ impl<'source> TestBed<'source> {
             <Self as Executable<Command>>::shutdown(self);
         }
     }
+
+    fn write_progress(&mut self) {
+        let Some(file) = &mut self.progress_file else { return };
+        let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+        file.seek(std::io::SeekFrom::Start(0))
+            .expect("Failed to seek file");
+
+        let mut written = 0;
+
+        for (_, value) in self.iters.iter() {
+            written += value
+                .write_summary(&mut *file)
+                .expect("Failed to write to file");
+            file.write_all(&[b'\n']).expect("Failed to write new line");
+            written += 1;
+        }
+
+        if written < len as usize {
+            let zeros = vec![b' '; len as usize - written];
+            file.write_all(&zeros).expect("Failed to write zeros");
+        }
+    }
 }
 
 impl<'source> Executable<Command> for TestBed<'source> {
@@ -101,7 +139,7 @@ impl<'source> Executable<Command> for TestBed<'source> {
             value.kill();
         }
 
-        for (_, value) in self.iters.drain() {
+        for (_, value) in self.iters.drain(..) {
             value.finish();
         }
     }
@@ -109,7 +147,7 @@ impl<'source> Executable<Command> for TestBed<'source> {
     fn finish(&mut self, _: &mut ProgramState, shutdown: &crate::program::Shutdown) {
         self.wait_all(None, 0, shutdown);
 
-        for (_, value) in self.iters.drain() {
+        for (_, value) in self.iters.drain(..) {
             value.finish();
         }
     }
@@ -156,18 +194,33 @@ impl<'source> Executable<Command> for TestBed<'source> {
         }
     }
 
-    fn start_iter(&mut self, iter_var: VarNameId, len: usize) {
-        let bar = self.iters.entry(iter_var).or_insert_with(|| {
-            let name = self.var_names.evaluate(iter_var).unwrap_or("Unknown");
-            IterProgress::new(name.into(), len as u64, &self.multibar)
-        });
+    fn set_iter(&mut self, iter_var: VarNameId, idx: usize, var: &Variable) {
+        let len = var.len().unwrap_or(0) as u64;
+        let bar = match self.iters.iter_mut().find(|(id, _)| *id == iter_var) {
+            Some((_, bar)) => bar,
+            None => {
+                let name = self.var_names.evaluate(iter_var).unwrap_or("Unknown");
+                let bar = IterProgress::new(name.into(), len, &self.multibar);
+                self.iters.push((iter_var, bar));
+                &mut self.iters.last_mut().unwrap().1
+            }
+        };
 
-        bar.reset();
-    }
+        bar.set(idx as u64);
 
-    fn set_iter(&mut self, iter_var: VarNameId, idx: usize) {
-        let Some(value) = self.iters.get_mut(&iter_var) else { return };
-        value.set(idx as u64);
+        match var {
+            Variable::Object(value) => {
+                bar.set_message(&value.base);
+            }
+            Variable::List(list) => {
+                if let Some(value) = list.get(idx) {
+                    bar.set_message(&value.base);
+                }
+            }
+            _ => {}
+        }
+
+        self.write_progress();
     }
 }
 

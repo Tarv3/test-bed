@@ -463,14 +463,10 @@ pub trait Executable<Command> {
 
     fn execute(&mut self, command: &Command, state: &mut ProgramState, shutdown: &Shutdown);
 
-    fn start_iter(&mut self, iter_var: VarNameId, len: usize) {
-        let _iter_var = iter_var;
-        let _len = len;
-    }
-
-    fn set_iter(&mut self, iter_var: VarNameId, idx: usize) {
+    fn set_iter(&mut self, iter_var: VarNameId, idx: usize, variable: &Variable) {
         let _iter_var = iter_var;
         let _idx = idx;
+        let _variable = variable;
     }
 }
 
@@ -578,7 +574,7 @@ impl<Command> Program<Command> {
                 }
                 Instruction::StartIter { target, iter, end } => match state.get_value(*target) {
                     Some((scope, value)) if value.len().is_some() && value.len().unwrap() > 0 => {
-                        executable.start_iter(*iter, value.len().unwrap());
+                        executable.set_iter(*iter, 0, value);
                         state.new_ref(*iter, *target, 0, scope, None);
                     }
                     _ => {
@@ -587,8 +583,8 @@ impl<Command> Program<Command> {
                     }
                 },
                 Instruction::Increment { target, iter, end } => {
-                    let len = match state.get_value(*target).map(|(_, value)| value.len()) {
-                        Some(Some(len)) => len,
+                    let len = match state.get_value(*target).map(|(_, value)| value) {
+                        Some(variable) if variable.len().is_some() => variable.len().unwrap(),
                         _ => {
                             counter = **end;
                             continue;
@@ -604,9 +600,13 @@ impl<Command> Program<Command> {
                     };
 
                     iter_var.offset += 1;
-                    executable.set_iter(*iter, iter_var.offset);
+                    let offset = iter_var.offset;
+                    let variable = state.get_value(*target).unwrap().1;
+                    // Set this to `offset - 1` because the test bed will only wait on a spawn
+                    // command and a previous incremement will typically correspond to the spawn.  
+                    executable.set_iter(*iter, offset - 1, variable);
 
-                    if iter_var.offset >= len {
+                    if offset >= len {
                         counter = **end;
                         continue;
                     }
