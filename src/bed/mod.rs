@@ -1,20 +1,23 @@
 use std::{
+    collections::HashMap,
     path::PathBuf,
     time::{Duration, Instant},
 };
 
 use indicatif::{MultiProgress, ProgressDrawTarget};
 
-use crate::program::{Executable, ProgramState, VarNames, Variable};
+use crate::program::{Executable, ProgramState, VarNameId, VarNames, Variable};
 
 use self::{
     commands::Command,
+    iters::IterProgress,
     process::ProcessInfo,
     templates::{yield_value, TemplateBuilder, TemplateCommand},
 };
 
 pub mod commands;
 pub mod expr;
+pub mod iters;
 pub mod process;
 pub mod templates;
 
@@ -26,6 +29,7 @@ pub struct TestBed<'source> {
 
     pub spawn_limit: Option<usize>,
     pub processes: Vec<ProcessInfo>,
+    pub iters: HashMap<VarNameId, IterProgress>,
     pub multibar: MultiProgress,
 }
 
@@ -43,6 +47,7 @@ impl<'source> TestBed<'source> {
             var_names,
             spawn_limit: None,
             processes: vec![],
+            iters: HashMap::new(),
             multibar: progress,
         }
     }
@@ -95,10 +100,18 @@ impl<'source> Executable<Command> for TestBed<'source> {
         for mut value in self.processes.drain(..) {
             value.kill();
         }
+
+        for (_, value) in self.iters.drain() {
+            value.finish();
+        }
     }
 
     fn finish(&mut self, _: &mut ProgramState, shutdown: &crate::program::Shutdown) {
         self.wait_all(None, 0, shutdown);
+
+        for (_, value) in self.iters.drain() {
+            value.finish();
+        }
     }
 
     fn execute(
@@ -141,6 +154,20 @@ impl<'source> Executable<Command> for TestBed<'source> {
                 self.wait_all(*timeout, 0, shutdown);
             }
         }
+    }
+
+    fn start_iter(&mut self, iter_var: VarNameId, len: usize) {
+        let bar = self.iters.entry(iter_var).or_insert_with(|| {
+            let name = self.var_names.evaluate(iter_var).unwrap_or("Unknown");
+            IterProgress::new(name.into(), len as u64, &self.multibar)
+        });
+
+        bar.reset();
+    }
+
+    fn set_iter(&mut self, iter_var: VarNameId, idx: usize) {
+        let Some(value) = self.iters.get_mut(&iter_var) else { return };
+        value.set(idx as u64);
     }
 }
 

@@ -39,8 +39,13 @@ for (a, b) in (variable_1, variable_2) {
     test = [a.output];
     test2 = [b.output];
 
-    spawn 
-        stdout(example/out/ + [test] + .json)
-        ./target/release/test-bed
-        [a.output];
+    for c in variable_3 {
+        sleep 500;
+
+    }
+
+    // spawn 
+    //     stdout(example/out/ + [test] + .json)
+    //     ./target/release/test-bed
+    //     [a.output];
 }
