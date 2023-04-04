@@ -341,6 +341,10 @@ impl ProgramState {
 
             let scope = &self.scopes[value.scope];
             variable = scope.0.get(&value.target)?;
+
+            if let Variable::List(list) = variable {
+                return Some(VariableDeref::Object(list.get(value.offset)?));
+            }
         }
 
         match variable {
@@ -381,9 +385,10 @@ impl ProgramState {
         match (id.field, object) {
             (None, VariableDeref::Counter(counter)) => Some(VariableField::Idx(counter.idx())),
             (None, VariableDeref::Object(object)) => Some(VariableField::String(&object.base)),
-            (Some(field), VariableDeref::Object(object)) => {
-                object.properties.get(&field).map(|value| VariableField::String(value.as_str()))
-            }
+            (Some(field), VariableDeref::Object(object)) => object
+                .properties
+                .get(&field)
+                .map(|value| VariableField::String(value.as_str())),
             (Some(_), VariableDeref::Counter(_)) => None,
         }
     }
