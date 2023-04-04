@@ -107,6 +107,16 @@ impl Object {
     }
 }
 
+pub enum VariableDeref<'a> {
+    Object(&'a Object),
+    Counter(&'a Counter),
+}
+
+pub enum VariableField<'a> {
+    String(&'a str),
+    Idx(i64),
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct VariableRef {
     pub scope: usize,
@@ -114,8 +124,31 @@ pub struct VariableRef {
     pub offset: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Counter {
+    pub offset: usize,
+    pub start: i64,
+    pub end: i64,
+}
+
+impl Counter {
+    pub fn idx(&self) -> i64 {
+        self.start + self.offset as i64
+    }
+
+    pub fn len(&self) -> usize {
+        let value = match self.end >= self.start {
+            true => self.end - self.start,
+            false => 0,
+        };
+
+        value as usize
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Variable {
+    Counter(Counter),
     Ref(VariableRef),
     Object(Object),
     List(Vec<Object>),
@@ -129,8 +162,16 @@ impl Variable {
         }
     }
 
+    pub fn is_counter(&self) -> bool {
+        match self {
+            Variable::Counter(_) => true,
+            _ => false,
+        }
+    }
+
     pub fn len(&self) -> Option<usize> {
         match self {
+            Variable::Counter(value) => Some(value.len()),
             Variable::Ref(_) => None,
             Variable::Object(_) => Some(1),
             Variable::List(list) => Some(list.len()),
@@ -169,6 +210,13 @@ impl Variable {
     pub fn as_ref(&mut self) -> &mut VariableRef {
         match self {
             Variable::Ref(value) => value,
+            _ => panic!("Tried to get non-ref value as VariableRef"),
+        }
+    }
+
+    pub fn as_counter(&mut self) -> &mut Counter {
+        match self {
+            Variable::Counter(value) => value,
             _ => panic!("Tried to get non-ref value as VariableRef"),
         }
     }
@@ -279,8 +327,12 @@ impl ProgramState {
         }
     }
 
-    pub fn get_object(&self, id: VarNameId, idx: Option<usize>) -> Option<&Object> {
+    pub fn get_object(&self, id: VarNameId, idx: Option<usize>) -> Option<VariableDeref> {
         let (_, mut variable) = self.get_value(id)?;
+
+        if let Variable::Counter(counter) = variable {
+            return Some(VariableDeref::Counter(counter));
+        }
 
         while let Variable::Ref(value) = variable {
             if idx.is_some() {
@@ -289,10 +341,6 @@ impl ProgramState {
 
             let scope = &self.scopes[value.scope];
             variable = scope.0.get(&value.target)?;
-
-            if let Variable::List(list) = variable {
-                return list.get(value.offset);
-            }
         }
 
         match variable {
@@ -300,36 +348,43 @@ impl ProgramState {
                 if idx.is_some() {
                     panic!("Tried to index into an object");
                 }
-                Some(value)
+                Some(VariableDeref::Object(value))
             }
             Variable::List(list) => {
                 let idx = idx.unwrap_or(0);
-                list.get(idx)
+                Some(VariableDeref::Object(list.get(idx)?))
             }
             _ => unreachable!(),
         }
     }
 
-    pub fn get_field(&self, id: &VarFieldId) -> Option<&str> {
+    pub fn get_field(&self, id: &VarFieldId) -> Option<VariableField> {
         let idx = match &id.idx {
             Some(value) => match value.as_ref() {
                 VariableIdx::Integer(idx) => Some(*idx),
-                VariableIdx::Variable(id) => {
-                    let value = self.get_field(id)?;
-                    match value.parse() {
+                VariableIdx::Variable(id) => match self.get_field(id)? {
+                    VariableField::String(value) => match value.parse() {
                         Ok(idx) => Some(idx),
                         Err(_) => panic!("List cannot be indexed by {value}",),
+                    },
+                    VariableField::Idx(idx) if idx >= 0 => Some(idx as usize),
+                    VariableField::Idx(idx) => {
+                        panic!("List cannot be indexed by {idx}");
                     }
-                }
+                },
             },
             None => None,
         };
 
         let object = self.get_object(id.var, idx)?;
 
-        match id.field {
-            Some(field) => object.properties.get(&field).map(|value| value.as_str()),
-            None => Some(&object.base),
+        match (id.field, object) {
+            (None, VariableDeref::Counter(counter)) => Some(VariableField::Idx(counter.idx())),
+            (None, VariableDeref::Object(object)) => Some(VariableField::String(&object.base)),
+            (Some(field), VariableDeref::Object(object)) => {
+                object.properties.get(&field).map(|value| VariableField::String(value.as_str()))
+            }
+            (Some(_), VariableDeref::Counter(_)) => None,
         }
     }
 
@@ -345,17 +400,12 @@ impl ProgramState {
                 Some(value) => value,
                 None => return VarIter::None,
             };
-
-            match variable {
-                Variable::Object(object) => return VarIter::Single(object),
-                Variable::List(list) => return VarIter::List(list.iter()),
-                Variable::Ref(_) => {}
-            }
         }
 
         match variable {
             Variable::Object(object) => VarIter::Single(object),
             Variable::List(list) => VarIter::List(list.iter()),
+            Variable::Counter(_) => return VarIter::None,
             Variable::Ref(_) => unreachable!(),
         }
     }
@@ -470,6 +520,12 @@ pub trait Executable<Command> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum IterTarget {
+    Variable(VarNameId),
+    Range { start: i64, end: i64 },
+}
+
 #[derive(Clone, Debug)]
 pub enum Instruction<T> {
     PushScope,
@@ -485,15 +541,15 @@ pub enum Instruction<T> {
     },
     StartIter {
         /// Id of the variable to iterate over
-        target: VarNameId,
+        target: IterTarget,
         /// Id of the variable used inside the iter
         iter: VarNameId,
-        end: InstructionId,
+        jump: InstructionId,
     },
     Increment {
-        target: VarNameId,
+        target: IterTarget,
         iter: VarNameId,
-        end: InstructionId,
+        jump: InstructionId,
     },
     Goto(InstructionId),
     Command(T),
@@ -572,21 +628,29 @@ impl<Command> Program<Command> {
                         }
                     }
                 }
-                Instruction::StartIter { target, iter, end } => match state.get_value(*target) {
+                Instruction::StartIter {
+                    target: IterTarget::Variable(target),
+                    iter,
+                    jump,
+                } => match state.get_value(*target) {
                     Some((scope, value)) if value.len().is_some() && value.len().unwrap() > 0 => {
                         executable.set_iter(*iter, 0, value);
                         state.new_ref(*iter, *target, 0, scope, None);
                     }
                     _ => {
-                        counter = **end;
+                        counter = **jump;
                         continue;
                     }
                 },
-                Instruction::Increment { target, iter, end } => {
+                Instruction::Increment {
+                    target: IterTarget::Variable(target),
+                    iter,
+                    jump,
+                } => {
                     let len = match state.get_value(*target).map(|(_, value)| value) {
                         Some(variable) if variable.len().is_some() => variable.len().unwrap(),
                         _ => {
-                            counter = **end;
+                            counter = **jump;
                             continue;
                         }
                     };
@@ -594,7 +658,7 @@ impl<Command> Program<Command> {
                     let iter_var = match state.get_value_mut(*iter) {
                         Some(value) if value.is_ref() => value.as_ref(),
                         _ => {
-                            counter = **end;
+                            counter = **jump;
                             continue;
                         }
                     };
@@ -602,12 +666,52 @@ impl<Command> Program<Command> {
                     iter_var.offset += 1;
                     let offset = iter_var.offset;
                     let variable = state.get_value(*target).unwrap().1;
-                    // Set this to `offset - 1` because the test bed will only wait on a spawn
-                    // command and a previous incremement will typically correspond to the spawn.  
-                    executable.set_iter(*iter, offset - 1, variable);
+                    executable.set_iter(*iter, offset, variable);
 
                     if offset >= len {
-                        counter = **end;
+                        counter = **jump;
+                        continue;
+                    }
+                }
+                Instruction::StartIter {
+                    target: IterTarget::Range { start, end },
+                    iter,
+                    jump,
+                } => {
+                    if start >= end {
+                        counter = **jump;
+                        continue;
+                    }
+
+                    let var = Variable::Counter(Counter {
+                        offset: 0,
+                        start: *start,
+                        end: *end,
+                    });
+                    let var = state.insert_var(*iter, var, None);
+                    executable.set_iter(*iter, 0, var);
+                }
+                Instruction::Increment {
+                    target: IterTarget::Range { end, .. },
+                    iter,
+                    jump,
+                } => {
+                    let iter_var = match state.get_value_mut(*iter) {
+                        Some(value) if value.is_counter() => value,
+                        _ => {
+                            counter = **jump;
+                            continue;
+                        }
+                    };
+
+                    let value = iter_var.as_counter();
+                    value.offset += 1;
+                    let idx = value.start + value.offset as i64;
+                    let offset = value.offset;
+                    executable.set_iter(*iter, offset, iter_var);
+
+                    if idx >= *end {
+                        counter = **jump;
                         continue;
                     }
                 }

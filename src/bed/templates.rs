@@ -102,15 +102,16 @@ impl<'source> TemplateBuilder<'source> {
                 }
 
                 let value = match value {
+                    crate::program::Variable::Counter(value) => format!("{}", value.idx()),
                     crate::program::Variable::List(_) => continue,
                     crate::program::Variable::Ref(value) => match state.evaluate_ref(*value) {
-                        Some(object) => object,
+                        Some(object) => object.base.clone(),
                         None => continue,
                     },
-                    crate::program::Variable::Object(object) => object,
+                    crate::program::Variable::Object(object) => object.base.clone(),
                 };
 
-                self.current_params.insert(name.into(), value.base.clone());
+                self.current_params.insert(name.into(), value);
             }
         }
 

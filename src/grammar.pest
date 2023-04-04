@@ -176,15 +176,27 @@ for_loop = {
 }
 
 for_loop_combinations = {
-    ("for" ~ ident ~ "in" ~ ident) | ("for" ~ ident_group ~ "in" ~ ident_group) 
+    ("for" ~ ident ~ "in" ~ iterable) | ("for" ~ ident_group ~ "in" ~ iterable_group) 
 }
 
 for_loop_groups = {
-    ("for" ~ ident ~ "in" ~ ident) | ("for" ~ "group" ~ ident_group ~ "in" ~ ident_group) 
+    ("for" ~ ident ~ "in" ~ iterable) | ("for" ~ "group" ~ ident_group ~ "in" ~ iterable_group) 
 }
 
 ident_group = {
     "(" ~ ident ~ ("," ~ ident)* ~ (",")? ~ ")"
+}
+
+iterable_group = {
+    "(" ~ iterable ~ ("," ~ iterable )* ~ (",")? ~ ")"
+}
+
+iterable = {
+    (range | ident)
+}
+
+range = {
+    signed_integer ~ ".." ~ signed_integer
 }
 
 variable_assignment = {
@@ -222,6 +234,7 @@ property_assignment = {
 ident = @{ ident_char ~ (ident_char | integer)* }
 ident_char = { ('a'..'z') | ('A'..'Z') | "_" }
 
+signed_integer = @{ ("-")? ~ integer }
 integer = @{ ('0'..'9')+ } 
 
 string_builder = {

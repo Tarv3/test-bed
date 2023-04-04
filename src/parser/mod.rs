@@ -11,7 +11,10 @@ use crate::{
         expr::{ObjectExpr, StringExpr, StringInstance, VariableExpr},
         templates::{BuildObjectExpr, BuildStringExpr, TemplateCommand},
     },
-    program::{Instruction, InstructionId, Program, VarFieldId, VarNameId, VarNames, VariableIdx},
+    program::{
+        Instruction, InstructionId, IterTarget, Program, VarFieldId, VarNameId, VarNames,
+        VariableIdx,
+    },
 };
 
 use self::{commands::build_commands_program, templates::build_templates_program};
@@ -72,12 +75,12 @@ impl Parsed {
 pub struct ForLoop {
     pub ty: ForLoopType,
     pub iters: Vec<VarNameId>,
-    pub targets: Vec<VarNameId>,
+    pub targets: Vec<IterTarget>,
 }
 
 pub fn build_group_loop<T>(
     iters: &[VarNameId],
-    targets: &[VarNameId],
+    targets: &[IterTarget],
     instructions: &mut Vec<Instruction<T>>,
     f: impl FnOnce(&mut Vec<Instruction<T>>),
 ) {
@@ -88,7 +91,7 @@ pub fn build_group_loop<T>(
         instructions.push(Instruction::StartIter {
             target: *target,
             iter: *iter,
-            end: InstructionId(0),
+            jump: InstructionId(0),
         })
     }
 
@@ -104,7 +107,7 @@ pub fn build_group_loop<T>(
         instructions.push(Instruction::Increment {
             target: *target,
             iter: *iter,
-            end: InstructionId(0),
+            jump: InstructionId(0),
         })
     }
 
@@ -113,21 +116,21 @@ pub fn build_group_loop<T>(
     instructions.push(Instruction::PopScope);
 
     for i in iter_start..goto {
-        if let Instruction::StartIter { end, .. } = &mut instructions[i] {
-            *end = InstructionId(end_idx)
+        if let Instruction::StartIter { jump, .. } = &mut instructions[i] {
+            *jump = InstructionId(end_idx)
         }
     }
 
     for i in increment_start..end_idx {
-        if let Instruction::Increment { end, .. } = &mut instructions[i] {
-            *end = InstructionId(end_idx)
+        if let Instruction::Increment { jump, .. } = &mut instructions[i] {
+            *jump = InstructionId(end_idx)
         }
     }
 }
 
 pub fn build_combination_loop<T>(
     iters: &[VarNameId],
-    targets: &[VarNameId],
+    targets: &[IterTarget],
     instructions: &mut Vec<Instruction<T>>,
     f: impl FnOnce(&mut Vec<Instruction<T>>),
 ) {
@@ -148,7 +151,7 @@ pub fn build_combination_loop<T>(
     instructions.push(Instruction::StartIter {
         target: this_target,
         iter: this_iter,
-        end: InstructionId(0),
+        jump: InstructionId(0),
     });
 
     let goto = instructions.len();
@@ -159,18 +162,18 @@ pub fn build_combination_loop<T>(
     instructions.push(Instruction::Increment {
         target: this_target,
         iter: this_iter,
-        end: InstructionId(0),
+        jump: InstructionId(0),
     });
 
     instructions.push(Instruction::Goto(InstructionId(goto)));
     let end_idx = instructions.len();
     instructions.push(Instruction::PopScope);
 
-    if let Instruction::StartIter { end, .. } = &mut instructions[iter_start] {
-        *end = InstructionId(end_idx)
+    if let Instruction::StartIter { jump, .. } = &mut instructions[iter_start] {
+        *jump = InstructionId(end_idx)
     }
-    if let Instruction::Increment { end, .. } = &mut instructions[increment_start] {
-        *end = InstructionId(end_idx)
+    if let Instruction::Increment { jump, .. } = &mut instructions[increment_start] {
+        *jump = InstructionId(end_idx)
     }
 }
 
@@ -663,6 +666,7 @@ pub fn parse_output_map(variables: &mut VarNames, pair: Pair<Rule>) -> OutputMap
 
 pub fn parse_for_loop(variables: &mut VarNames, pair: Pair<Rule>) -> ForLoop {
     let inner = pair.into_inner().next().unwrap();
+    let (line, col) = inner.line_col();
 
     let ty = match inner.as_rule() {
         Rule::for_loop_combinations => ForLoopType::Combinations,
@@ -680,13 +684,17 @@ pub fn parse_for_loop(variables: &mut VarNames, pair: Pair<Rule>) -> ForLoop {
     match iters_pairs.as_rule() {
         Rule::ident => {
             iters = vec![parse_ident(variables, iters_pairs)];
-            targets = vec![parse_ident(variables, targets_pairs)];
+            targets = vec![parse_iterable(variables, targets_pairs)];
         }
         Rule::ident_group => {
             iters = parse_ident_group(variables, iters_pairs);
-            targets = parse_ident_group(variables, targets_pairs);
+            targets = parse_iterable_group_group(variables, targets_pairs);
         }
         _ => unreachable!(),
+    }
+
+    if iters.len() != targets.len() {
+        panic!("Incorrect number of iter variables: [Line {}, Column {}]", line, col);
     }
 
     ForLoop { ty, iters, targets }
@@ -701,6 +709,62 @@ pub fn parse_ident_group(variables: &mut VarNames, pair: Pair<Rule>) -> Vec<VarN
     }
 
     group
+}
+
+pub fn parse_iterable_group_group(variables: &mut VarNames, pair: Pair<Rule>) -> Vec<IterTarget> {
+    let mut group = vec![];
+    let inner = pair.into_inner();
+
+    for value in inner {
+        group.push(parse_iterable(variables, value));
+    }
+
+    group
+}
+
+pub fn parse_iterable(variables: &mut VarNames, pair: Pair<Rule>) -> IterTarget {
+    let inner = pair.into_inner().next().unwrap();
+
+    match inner.as_rule() {
+        Rule::ident => {
+            let ident = parse_ident(variables, inner);
+
+            IterTarget::Variable(ident)
+        }
+        Rule::range => {
+            let (start, end) = parse_range(inner);
+
+            IterTarget::Range { start, end }
+        }
+        _ => {
+            unreachable!()
+        }
+    }
+}
+
+pub fn parse_range(pair: Pair<Rule>) -> (i64, i64) {
+    let mut iter = pair.into_inner();
+    let start = iter.next().unwrap();
+    let end = iter.next().unwrap();
+
+    let (start_line, start_col) = start.line_col();
+    let Ok(start) = start.as_str().parse() else {
+        panic!("Failed to parse start `{}`: [Line {}, Column {}]", start.as_str(), start_line, start_col);
+    };
+
+    let (line, col) = end.line_col();
+    let Ok(end) = end.as_str().parse() else {
+        panic!("Failed to parse end `{}`: [Line {}, Column {}]", end.as_str(), line, col);
+    };
+
+    if start >= end {
+        eprintln!(
+            "Warn: Start >= End ({}..{}): [Line {}, Column {}]",
+            start, end, start_line, start_col
+        );
+    }
+
+    (start, end)
 }
 
 pub fn parse_variable_assignment(

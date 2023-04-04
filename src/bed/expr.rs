@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Write};
 
-use crate::program::{Object, ProgramState, VarFieldId, VarNameId, Variable};
+use crate::program::{Object, ProgramState, VarFieldId, VarNameId, Variable, VariableField};
 
 #[derive(Clone, Debug)]
 pub enum StringInstance {
@@ -18,11 +18,15 @@ impl StringExpr {
         for value in self.0.iter() {
             match value {
                 StringInstance::String(value) => output.push_str(value),
-                StringInstance::Variable(var) => {
-                    if let Some(value) = state.get_field(var) {
-                        output.push_str(value);
+                StringInstance::Variable(var) => match state.get_field(var) {
+                    Some(VariableField::String(str)) => {
+                        output.push_str(str);
                     }
-                }
+                    Some(VariableField::Idx(idx)) => {
+                        write!(output, "{idx}").unwrap();
+                    }
+                    None => {}
+                },
             }
         }
 

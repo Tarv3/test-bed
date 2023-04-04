@@ -3,6 +3,8 @@ use std::{io::Write, time::Duration};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 pub struct IterProgress {
+    next_idx: u64,
+    next_message: String,
     bar: ProgressBar,
 }
 
@@ -18,19 +20,30 @@ impl IterProgress {
         let bar = multibar.add(bar);
         bar.set_prefix(name);
 
-        Self { bar }
-    }
-
-    pub fn set(&self, value: u64) {
-        if value == 0 {
-            self.bar.reset();
-        } else {
-            self.bar.set_position(value);
+        Self {
+            next_idx: 0,
+            next_message: String::new(),
+            bar,
         }
     }
 
-    pub fn set_message(&self, message: &str) {
-        self.bar.set_message(message.to_string());
+    pub fn set(&mut self, value: u64) {
+        self.next_idx = value;
+    }
+
+    pub fn set_message(&mut self, message: &str) {
+        self.next_message.clear();
+        self.next_message.push_str(message);
+    }
+
+    pub fn update(&self) {
+        if self.next_idx == 0 {
+            self.bar.reset();
+        } else {
+            self.bar.set_position(self.next_idx);
+        }
+
+        self.bar.set_message(self.next_message.clone());
     }
 
     pub fn finish(&self) {
@@ -65,7 +78,7 @@ impl IterProgress {
         let (eta_s, eta_m, eta_h) = seconds_to_smh(eta.as_secs());
         let (elapsed_s, elapsed_m, elapsed_h) = seconds_to_smh(elapsed.as_secs());
 
-        let formatted = format!("{var_name} : {pos} / {len} : Eta {eta_h}h:{eta_m}m:{eta_s}s : Elapsed {elapsed_h}h:{elapsed_m}m:{elapsed_s}s : {message}");
+        let formatted = format!("[{var_name} = {pos} / {len}] : Eta {eta_h}h:{eta_m}m:{eta_s}s : Elapsed {elapsed_h}h:{elapsed_m}m:{elapsed_s}s : {message}");
         let bytes = formatted.as_bytes();
 
         writer.write_all(bytes)?;

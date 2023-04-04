@@ -178,6 +178,9 @@ impl<'source> Executable<Command> for TestBed<'source> {
                     }
                 }
 
+                self.iters.iter().for_each(|value| value.1.update());
+                self.write_progress();
+
                 let mut process = spawn.evaluate(stack);
                 if let Err(e) = process.run(self.iters.len(), &self.multibar) {
                     self.multibar
@@ -217,10 +220,11 @@ impl<'source> Executable<Command> for TestBed<'source> {
                     bar.set_message(&value.base);
                 }
             }
+            Variable::Counter(counter) => {
+                bar.set_message(&format!("{}", counter.idx()))
+            }
             _ => {}
         }
-
-        self.write_progress();
     }
 }
 

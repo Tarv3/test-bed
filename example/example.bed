@@ -35,11 +35,11 @@ for (a, b, c) in (variable_1, variable_2, variable_3) {
 limit 2;
 value = [variable_2[1].hello];
 
-for (a, b) in (variable_1, variable_2) {
+for (a, b) in (variable_1, -3..5) {
     test = [a.output];
     test2 = [b.output];
 
-    for zeta in variable_3 {
+    for (zeta, beta) in (variable_3, variable_2) {
         // sleep 100;
         spawn 
             stdout(example/out/ + [test] + .json)
