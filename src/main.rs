@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate pest_derive;
 
-use std::sync::mpsc::channel;
+use std::{collections::HashMap, sync::mpsc::channel};
 
 mod bed;
 mod parser;
@@ -41,11 +41,37 @@ fn main() {
                 commands.push(None);
                 continue;
             }
+            "--" => {
+                break;
+            }
             x => {
                 let id = parsed.names.replace(x);
                 commands.push(Some(id));
             }
         }
+    }
+
+    let mut params = HashMap::new();
+
+    while let Some(value) = args.next() {
+        let mut split = value.split("=");
+        let variable = split.next().unwrap();
+        let id = match variable.split_once(".") {
+            Some((id, property)) => (
+                parsed.names.replace(id),
+                Some(parsed.names.replace(property)),
+            ),
+            None => (parsed.names.replace(variable), None),
+        };
+
+        let value = match split.next() {
+            Some(value) => value,
+            None => {
+                panic!("Invalid input arg `{value}`, expected <variable>=<value>")
+            }
+        };
+
+        params.insert(id, value.to_string());
     }
 
     let command_programs = match commands.is_empty() && !run_all {
@@ -92,6 +118,11 @@ fn main() {
     std::thread::spawn(move || {
         let mut state = ProgramState::new();
         state.new_scope();
+
+        for ((id, property), value) in params.iter() {
+            state.set_var(*id, *property, value.clone());
+        }
+
         globals_program.run(&mut test_bed, &mut state, &shutdown);
         for (name, program) in template_programs {
             test_bed

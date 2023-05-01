@@ -455,6 +455,35 @@ impl ProgramState {
         scope.0.get_mut(&id).unwrap()
     }
 
+    pub fn set_var(&mut self, id: VarNameId, property: Option<VarNameId>, value: String) {
+        if self.scopes.is_empty() {
+            self.new_scope();
+        }
+
+        let scope = self.scopes.last_mut().unwrap();
+
+        let var = scope.0.entry(id).or_insert_with(|| {
+            Variable::Object(Object {
+                base: "".into(),
+                properties: Default::default(),
+            })
+        });
+
+        let object = match var {
+            Variable::Object(object) => object,
+            _ => panic!("Tried to set value of non-object"),
+        };
+
+        match property {
+            Some(property) => {
+                object.properties.insert(property, value);
+            }
+            None => {
+                object.base = value;
+            }
+        }
+    }
+
     pub fn new_list(&mut self, id: VarNameId, scope: Option<usize>) -> &mut Vec<Object> {
         let list = self.list_cache.pop().unwrap_or(vec![]);
         let var = Variable::List(list);
