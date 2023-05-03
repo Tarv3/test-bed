@@ -100,12 +100,16 @@ command_program = {
 }
 
 command_expr = {
-    (command ~ ";") | command_for_loop
+    (command ~ ";") | command_for_loop | command_if_statement
     
 }
 
 command_for_loop = {
     for_loop ~ "{" ~ (command_expr)* ~ "}"
+}
+
+command_if_statement = {
+    if_statement ~ "{" ~ (command_expr)* ~ "}"
 }
 
 command = {
@@ -171,6 +175,10 @@ arg_builder = {
 
 // ============= Commands ==============
 
+if_statement = {
+    ("if" ~ variable_access+)
+}
+
 for_loop = {
     for_loop_combinations | for_loop_groups
 }
@@ -180,7 +188,7 @@ for_loop_combinations = {
 }
 
 for_loop_groups = {
-    ("for" ~ ident ~ "in" ~ iterable) | ("for" ~ "group" ~ ident_group ~ "in" ~ iterable_group) 
+    ("for" ~ "group" ~ ident ~ "in" ~ iterable) | ("for" ~ "group" ~ ident_group ~ "in" ~ iterable_group) 
 }
 
 ident_group = {

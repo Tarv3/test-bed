@@ -463,6 +463,10 @@ pub enum CommandExpr {
         for_loop: ForLoop,
         exprs: Vec<CommandExpr>,
     },
+    If {
+        conditions: Vec<VarFieldId>,
+        exprs: Vec<CommandExpr>,
+    },
 }
 
 pub fn parse_command_program(variables: &mut VarNames, pair: Pair<Rule>) -> Vec<CommandExpr> {
@@ -497,6 +501,20 @@ pub fn parse_command_expr(variables: &mut VarNames, pair: Pair<Rule>) -> Command
             }
 
             CommandExpr::ForLoop { for_loop, exprs }
+        }
+        Rule::command_if_statement => {
+            let mut inner = inner.into_inner();
+            let if_statement = inner.next().unwrap();
+            let conditions = parse_if_statement(variables, if_statement);
+
+            let mut exprs = vec![];
+
+            for value in inner {
+                let expr = parse_command_expr(variables, value);
+                exprs.push(expr);
+            }
+
+            CommandExpr::If { conditions, exprs }
         }
         _ => unreachable!(),
     }
@@ -664,6 +682,18 @@ pub fn parse_output_map(variables: &mut VarNames, pair: Pair<Rule>) -> OutputMap
 
 // ======================= Commands ===========================
 
+pub fn parse_if_statement(variables: &mut VarNames, pair: Pair<Rule>) -> Vec<VarFieldId> {
+    let mut conditions = vec![];
+    let inner = pair.into_inner();
+
+    for value in inner {
+        let access = parse_variable_access(variables, value);
+        conditions.push(access);
+    }
+
+    conditions
+}
+
 pub fn parse_for_loop(variables: &mut VarNames, pair: Pair<Rule>) -> ForLoop {
     let inner = pair.into_inner().next().unwrap();
     let (line, col) = inner.line_col();
@@ -694,7 +724,10 @@ pub fn parse_for_loop(variables: &mut VarNames, pair: Pair<Rule>) -> ForLoop {
     }
 
     if iters.len() != targets.len() {
-        panic!("Incorrect number of iter variables: [Line {}, Column {}]", line, col);
+        panic!(
+            "Incorrect number of iter variables: [Line {}, Column {}]",
+            line, col
+        );
     }
 
     ForLoop { ty, iters, targets }

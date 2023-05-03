@@ -1,6 +1,6 @@
 use crate::{
     bed::commands::Command,
-    program::{Instruction, Program},
+    program::{Instruction, InstructionId, Program},
 };
 
 use super::CommandExpr;
@@ -24,6 +24,32 @@ pub fn build_expr(expr: CommandExpr, instructions: &mut Vec<Instruction<Command>
                     build_expr(expr, instructions);
                 }
             });
+        }
+        CommandExpr::If { conditions, exprs } => {
+            let start = instructions.len();
+
+            for cond in conditions {
+                instructions.push(Instruction::ConditionalJump {
+                    cond,
+                    jump: InstructionId(0),
+                });
+            }
+
+            let end = instructions.len();
+
+            for expr in exprs {
+                build_expr(expr, instructions);
+            }
+
+            let jump_target = instructions.len();
+
+            for i in start..end {
+                let Instruction::ConditionalJump { jump, .. } = &mut instructions[i] else { 
+                    unreachable!() 
+                };
+
+                jump.0 = jump_target;
+            }
         }
     }
 }

@@ -284,6 +284,12 @@ where
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum ListIdx<'a> {
+    Integer(usize),
+    String(&'a str),
+}
+
 pub struct ProgramState {
     pub scopes: Vec<Scope>,
 
@@ -327,7 +333,7 @@ impl ProgramState {
         }
     }
 
-    pub fn get_object(&self, id: VarNameId, idx: Option<usize>) -> Option<VariableDeref> {
+    pub fn get_object(&self, id: VarNameId, idx: Option<ListIdx>) -> Option<VariableDeref> {
         let (_, mut variable) = self.get_value(id)?;
 
         if let Variable::Counter(counter) = variable {
@@ -355,8 +361,15 @@ impl ProgramState {
                 Some(VariableDeref::Object(value))
             }
             Variable::List(list) => {
-                let idx = idx.unwrap_or(0);
-                Some(VariableDeref::Object(list.get(idx)?))
+                let idx = idx.unwrap_or(ListIdx::Integer(0));
+
+                match idx {
+                    ListIdx::Integer(idx) => Some(VariableDeref::Object(list.get(idx)?)),
+                    ListIdx::String(lookup) => {
+                        let value = list.iter().find(|value| value.base == lookup)?;
+                        Some(VariableDeref::Object(value))
+                    }
+                }
             }
             _ => unreachable!(),
         }
@@ -365,13 +378,14 @@ impl ProgramState {
     pub fn get_field(&self, id: &VarFieldId) -> Option<VariableField> {
         let idx = match &id.idx {
             Some(value) => match value.as_ref() {
-                VariableIdx::Integer(idx) => Some(*idx),
+                VariableIdx::Integer(idx) => Some(ListIdx::Integer(*idx)),
                 VariableIdx::Variable(id) => match self.get_field(id)? {
                     VariableField::String(value) => match value.parse() {
-                        Ok(idx) => Some(idx),
-                        Err(_) => panic!("List cannot be indexed by {value}",),
+                        Ok(idx) => Some(ListIdx::Integer(idx)),
+                        _ => Some(ListIdx::String(value)),
+                        // Err(_) => panic!("List cannot be indexed by {value}",),
                     },
-                    VariableField::Idx(idx) if idx >= 0 => Some(idx as usize),
+                    VariableField::Idx(idx) if idx >= 0 => Some(ListIdx::Integer(idx as usize)),
                     VariableField::Idx(idx) => {
                         panic!("List cannot be indexed by {idx}");
                     }
@@ -585,6 +599,10 @@ pub enum Instruction<T> {
         iter: VarNameId,
         jump: InstructionId,
     },
+    ConditionalJump {
+        cond: VarFieldId,
+        jump: InstructionId,
+    },
     Goto(InstructionId),
     Command(T),
 }
@@ -745,6 +763,24 @@ impl<Command> Program<Command> {
                     executable.set_iter(*iter, offset, iter_var);
 
                     if idx >= *end {
+                        counter = **jump;
+                        continue;
+                    }
+                }
+                Instruction::ConditionalJump { cond, jump } => {
+                    let variable = state.get_field(cond);
+                    let mut pass = true; 
+
+                    if let Some(value) = variable {
+                        pass = match value {
+                            VariableField::String(value) if value != "false" => false,
+                            VariableField::Idx(value) if value != 0 => false,
+                            _ => true,
+                        };
+
+                    }
+                    
+                    if pass {
                         counter = **jump;
                         continue;
                     }

@@ -20,6 +20,13 @@ variable_3 = [
     1, 2, 3, 4
 ];
 
+variable_4 = [
+    ("test1", value=11),
+    ("test2", value=12),
+    ("test3", value=13),
+    ("test4", value=14),
+];
+
 [template.pilot]
 value = [variable_1[0].name];
 value = [variable_1[variable_3[variable_3[2]]]];
@@ -34,14 +41,15 @@ for (a, b, c) in (variable_1, variable_2, variable_3) {
 [commands]
 limit 2;
 value = [variable_2[1].hello];
+string_idx = "test" + [variable_3[1]];
+string_value = [variable_4[string_idx].value];
 
 for (a, b, c) in (variable_1, -3..5, input_arg) {
     test = [a.output];
     test2 = [b.output];
     value = [c.test];
 
-    for (zeta, beta, c_value) in (variable_3, variable_2, value) {
-        // sleep 100;
+    for (zeta, beta, c_value, str_val) in (variable_3, variable_2, value, string_value) {
         spawn 
             stdout(example/out/ + [test] + .json)
             ./target/release/test-bed
@@ -50,5 +58,39 @@ for (a, b, c) in (variable_1, -3..5, input_arg) {
             zeta [zeta]
             ;
     }
+}
 
+if_test1 = "false";
+
+if if_test1 {
+    for if_test1_failure in variable_1 {
+        sleep 1000;
+    }
+}
+
+if missing_variable {
+    for missing_var in variable_4 {
+        sleep 1000;
+    }
+}
+
+if_test2 = "anything";
+
+if if_test2 {
+    for success in variable_4 {
+        sleep 100;
+        spawn ./nothing;
+    }
+}
+
+if_test3 = (
+    "some_name",
+    field1="somevalue",
+);
+
+if if_test3.field1 {
+    for if_test3_field in variable_4 {
+        sleep 100;
+        spawn ./nothing;
+    }
 }
