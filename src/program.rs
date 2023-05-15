@@ -582,6 +582,11 @@ pub enum Instruction<T> {
         target: VarNameId,
         object: ObjectExpr,
     },
+    CreateVar {
+        target: VarNameId,
+        scope: Option<usize>,
+        value: VariableExpr,
+    },
     AssignVar {
         target: VarNameId,
         scope: Option<usize>,
@@ -663,7 +668,7 @@ impl<Command> Program<Command> {
                         }
                     }
                 }
-                Instruction::AssignVar {
+                Instruction::CreateVar {
                     target,
                     scope,
                     value,
@@ -677,6 +682,27 @@ impl<Command> Program<Command> {
                         }
                         None => {
                             state.insert_var(*target, eval, None);
+                        }
+                    }
+                }
+                Instruction::AssignVar {
+                    target,
+                    scope,
+                    value,
+                } => {
+                    let eval = value.evaluate(state);
+                    match scope {
+                        Some(scope) => {
+                            if let Some(scope) = state.scopes.get_mut(*scope) {
+                                if let Some(variable) = scope.0.get_mut(target) {
+                                    *variable = eval;
+                                }
+                            }
+                        }
+                        None => {
+                            if let Some(variable) = state.get_value_mut(*target) {
+                                *variable = eval;
+                            }
                         }
                     }
                 }
@@ -769,7 +795,7 @@ impl<Command> Program<Command> {
                 }
                 Instruction::ConditionalJump { cond, jump } => {
                     let variable = state.get_field(cond);
-                    let mut pass = true; 
+                    let mut pass = true;
 
                     if let Some(value) = variable {
                         pass = match value {
@@ -777,9 +803,8 @@ impl<Command> Program<Command> {
                             VariableField::Idx(value) if value != 0 => false,
                             _ => true,
                         };
-
                     }
-                    
+
                     if pass {
                         counter = **jump;
                         continue;

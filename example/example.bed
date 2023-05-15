@@ -60,6 +60,20 @@ for (a, b, c) in (variable_1, -3..5, input_arg) {
     }
 }
 
+append_var = "Start:";
+append_list = [[append_var]];
+
+for a in variable_1 {
+    append_var := [append_var] + [a] + ":";
+    append_list.push([append_var]);
+}
+
+for appended in append_list {
+    sleep 250;
+}
+
+
+
 if_test1 = "false";
 
 if if_test1 {

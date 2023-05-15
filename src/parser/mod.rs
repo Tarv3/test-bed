@@ -284,14 +284,7 @@ pub fn parse_globals_program<T>(variables: &mut VarNames, pair: Pair<Rule>) -> P
     let mut exprs = vec![];
 
     for value in inner {
-        let (target, value) = parse_variable_assignment(variables, value);
-
-        let instruction = Instruction::AssignVar {
-            target,
-            scope: None,
-            value,
-        };
-
+        let instruction = parse_variable_assignment(variables, value);
         exprs.push(instruction);
     }
 
@@ -524,15 +517,7 @@ pub fn parse_command(variables: &mut VarNames, pair: Pair<Rule>) -> Instruction<
     let inner = pair.into_inner().next().unwrap();
 
     match inner.as_rule() {
-        Rule::variable_assignment => {
-            let (target, value) = parse_variable_assignment(variables, inner);
-
-            Instruction::AssignVar {
-                target,
-                scope: None,
-                value,
-            }
-        }
+        Rule::variable_assignment => parse_variable_assignment(variables, inner),
         Rule::push => {
             let (target, object) = parse_push(variables, inner);
             Instruction::PushList { target, object }
@@ -800,60 +785,62 @@ pub fn parse_range(pair: Pair<Rule>) -> (i64, i64) {
     (start, end)
 }
 
-pub fn parse_variable_assignment(
-    variables: &mut VarNames,
-    pair: Pair<Rule>,
-) -> (VarNameId, VariableExpr) {
+pub fn parse_variable_assignment<T>(variables: &mut VarNames, pair: Pair<Rule>) -> Instruction<T> {
+    let mut inner = pair.into_inner();
+    let ident = parse_ident(variables, inner.next().unwrap());
+    let create = parse_variable_assign_op(inner.next().unwrap());
+    let expr = parse_variable_expression(variables, inner.next().unwrap());
+
+    match create {
+        true => Instruction::CreateVar {
+            target: ident,
+            scope: None,
+            value: expr,
+        },
+        false => Instruction::AssignVar {
+            target: ident,
+            scope: None,
+            value: expr,
+        },
+    }
+}
+
+// Returns true if the op is create
+pub fn parse_variable_assign_op(pair: Pair<Rule>) -> bool {
     let inner = pair.into_inner().next().unwrap();
 
     match inner.as_rule() {
-        Rule::list_assignment => {
-            let (target, list) = parse_list_assignment(variables, inner);
-            (target, VariableExpr::List(list))
-        }
-        Rule::object_assignment => {
-            let (target, object) = parse_object_assignment(variables, inner);
-            (target, VariableExpr::Object(object))
-        }
+        Rule::variable_create => true,
+        Rule::variable_assign => false,
+        _ => unreachable!(),
+    }
+}
+
+pub fn parse_variable_expression(variables: &mut VarNames, pair: Pair<Rule>) -> VariableExpr {
+    let inner = pair.into_inner().next().unwrap();
+
+    match inner.as_rule() {
+        Rule::object => VariableExpr::Object(parse_object(variables, inner)),
+        Rule::list_expression => VariableExpr::List(parse_list_expression(variables, inner)),
         _ => {
             unreachable!()
         }
     }
 }
 
-pub fn parse_push(variables: &mut VarNames, pair: Pair<Rule>) -> (VarNameId, ObjectExpr) {
-    let mut inner = pair.into_inner();
-    let ident = inner.next().unwrap();
-    let ident = parse_ident(variables, ident);
-
-    let object = inner.next().unwrap();
-    let object = parse_object(variables, object);
-
-    (ident, object)
-}
-
-pub fn parse_list_assignment(
-    variables: &mut VarNames,
-    pair: Pair<Rule>,
-) -> (VarNameId, Vec<ObjectExpr>) {
-    let mut inner = pair.into_inner();
-    let ident = inner.next().unwrap();
-    let ident = parse_ident(variables, ident);
+pub fn parse_list_expression(variables: &mut VarNames, pair: Pair<Rule>) -> Vec<ObjectExpr> {
+    let inner = pair.into_inner();
     let mut objects = vec![];
 
     for value in inner {
         objects.push(parse_object(variables, value));
     }
 
-    (ident, objects)
+    objects
 }
 
-pub fn parse_object_assignment(
-    variables: &mut VarNames,
-    pair: Pair<Rule>,
-) -> (VarNameId, ObjectExpr) {
+pub fn parse_push(variables: &mut VarNames, pair: Pair<Rule>) -> (VarNameId, ObjectExpr) {
     let mut inner = pair.into_inner();
-
     let ident = inner.next().unwrap();
     let ident = parse_ident(variables, ident);
 

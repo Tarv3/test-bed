@@ -208,19 +208,31 @@ range = {
 }
 
 variable_assignment = {
-    (object_assignment | list_assignment)
+    ident ~ variable_assign_op ~ variable_expression
 }
 
 push = {
     ident ~ "." ~ "push" ~ "(" ~ object ~ ")" 
 }
 
-list_assignment = {
-    ident ~ "=" ~ "[" ~ (object ~ ("," ~ object)* ~ ","?)? ~ "]"
+variable_expression = {
+    (object | list_expression)
 }
 
-object_assignment = {
-    ident ~ "=" ~ object
+list_expression = {
+    "[" ~ (object ~ ("," ~ object)* ~ ","?)? ~ "]"
+}
+
+variable_assign_op = {
+    (variable_assign | variable_create)
+}
+
+variable_create = {
+    "="
+}
+
+variable_assign = {
+    ":="
 }
 
 variable_access = {

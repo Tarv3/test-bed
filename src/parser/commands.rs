@@ -36,11 +36,13 @@ pub fn build_expr(expr: CommandExpr, instructions: &mut Vec<Instruction<Command>
             }
 
             let end = instructions.len();
+            instructions.push(Instruction::PushScope);
 
             for expr in exprs {
                 build_expr(expr, instructions);
             }
 
+            instructions.push(Instruction::PopScope);
             let jump_target = instructions.len();
 
             for i in start..end {

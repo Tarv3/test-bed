@@ -1,0 +1,26 @@
+[includes]
+"example/templates"
+
+[output]
+"example/builds"
+
+[globals]
+variable_1 = [
+    ("1", output="property"),
+    ("2", output="property2\""),
+    ("3", output="property3"),
+];
+
+[commands]
+append_var = "Start:";
+append_list = [[append_var]];
+
+for a in variable_1 {
+    append_var := [append_var] + [a] + ":";
+    append_list.push([append_var]);
+}
+
+for appended in append_list {
+    sleep 250;
+    spawn ./nothing;
+}
