@@ -52,15 +52,20 @@ template_program = {
 }
 
 template_expr = {
-    (template ~ ";") | template_for_loop
+    (template ~ ";") | template_for_loop | template_if_statement
 }
 
 template_for_loop = {
     for_loop ~ "{" ~ (template_expr)* ~ "}"
 }
 
+template_if_statement = {
+    if_statement ~ "{" ~ (template_expr)* ~ "}"
+}
+
 template = {
     build_assignment |
+    variable_assignment |
     push | 
     yield_template
 }
@@ -70,20 +75,15 @@ build_assignment = {
 }
 
 yield_template = { 
-    "yield" ~ build_object
+    "yield" ~ yield_object
+}
+
+yield_object = {
+    build_object | object
 }
 
 build_object = {
-    ("(" ~ build_string_expr ~ ("," ~ build_property_assignment)* ~ ","? ~ ")") | build_string_expr
-}
-
-build_property_assignment = {
-    ident ~ "=" ~ build_string_expr
-}
-
-build_string_expr = {
-    build_fn | 
-    string_builder
+    ("(" ~ build_fn ~ ("," ~ property_assignment)* ~ ","? ~ ")") | build_fn
 }
 
 build_fn = {

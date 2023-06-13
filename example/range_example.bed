@@ -9,11 +9,28 @@
 
 [template.pilot]
 
+value = true;
+test = 10.0;
+
+if value {
+    test := 20.0;
+}
+
+yield [test];
+
 [commands]
 limit 2;
 
 start = 20;
 end = 25;
+
+for value in pilot {
+    spawn 
+        stdout(example/out/ + [test] + .json)
+        ./target/release/test-bed
+        value [value]
+        ;
+}
 
 for i in [start]..[end] {
     spawn 

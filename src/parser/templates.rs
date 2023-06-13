@@ -1,6 +1,6 @@
 use crate::{
     bed::templates::TemplateCommand,
-    program::{Instruction, Program},
+    program::{Instruction, Program, InstructionId},
 };
 
 use super::TemplateExpr;
@@ -26,6 +26,34 @@ pub fn build_expr(expr: TemplateExpr, instructions: &mut Vec<Instruction<Templat
                     build_expr(expr, instructions);
                 }
             });
+        }
+        TemplateExpr::If { conditions, exprs } => {
+            let start = instructions.len();
+
+            for cond in conditions {
+                instructions.push(Instruction::ConditionalJump {
+                    cond,
+                    jump: InstructionId(0),
+                });
+            }
+
+            let end = instructions.len();
+            instructions.push(Instruction::PushScope);
+
+            for expr in exprs {
+                build_expr(expr, instructions);
+            }
+
+            instructions.push(Instruction::PopScope);
+            let jump_target = instructions.len();
+
+            for i in start..end {
+                let Instruction::ConditionalJump { jump, .. } = &mut instructions[i] else { 
+                    unreachable!() 
+                };
+
+                jump.0 = jump_target;
+            }
         }
     }
 }

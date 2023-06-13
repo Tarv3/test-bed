@@ -202,7 +202,7 @@ impl BuildStringExpr {
 #[derive(Clone, Debug)]
 pub struct BuildObjectExpr {
     pub base: BuildStringExpr,
-    pub properties: HashMap<VarNameId, BuildStringExpr>,
+    pub properties: HashMap<VarNameId, StringExpr>,
 }
 
 impl BuildObjectExpr {
@@ -223,7 +223,7 @@ impl BuildObjectExpr {
 
         let mut object = Object::new(base);
         for (key, value) in self.properties.iter() {
-            let value = value.evaluate(state, builder, names)?;
+            let value = value.evaluate(state);
             object.properties.insert(*key, value);
         }
 

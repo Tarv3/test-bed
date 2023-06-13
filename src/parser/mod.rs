@@ -302,6 +302,10 @@ pub enum TemplateExpr {
         for_loop: ForLoop,
         exprs: Vec<TemplateExpr>,
     },
+    If {
+        conditions: Vec<VarFieldId>,
+        exprs: Vec<TemplateExpr>,
+    },
 }
 
 pub fn parse_template_program(
@@ -345,6 +349,20 @@ pub fn parse_template_expr(
 
             TemplateExpr::ForLoop { for_loop, exprs }
         }
+        Rule::template_if_statement => {
+            let mut inner = inner.into_inner();
+            let if_statement = inner.next().unwrap();
+            let conditions = parse_if_statement(variables, if_statement);
+
+            let mut exprs = vec![];
+
+            for value in inner {
+                let expr = parse_template_expr(template_target, variables, value);
+                exprs.push(expr);
+            }
+
+            TemplateExpr::If { conditions, exprs }
+        }
         _ => {
             unreachable!()
         }
@@ -363,6 +381,7 @@ pub fn parse_template(
             let (output, object) = parse_build_assignment(variables, inner);
             Instruction::Command(TemplateCommand::BuildAssign { output, object })
         }
+        Rule::variable_assignment => parse_variable_assignment(variables, inner),
         Rule::push => {
             let (target, object) = parse_push(variables, inner);
             Instruction::PushList { target, object }
@@ -392,47 +411,41 @@ pub fn parse_build_assignment(
 
 pub fn parse_yield_template(variables: &mut VarNames, pair: Pair<Rule>) -> BuildObjectExpr {
     let inner = pair.into_inner().next().unwrap();
-    parse_build_object(variables, inner)
+    parse_yield_object(variables, inner)
+}
+
+pub fn parse_yield_object(variables: &mut VarNames, pair: Pair<Rule>) -> BuildObjectExpr {
+    let inner = pair.into_inner().next().unwrap();
+
+    match inner.as_rule() {
+        Rule::build_object => parse_build_object(variables, inner),
+        Rule::object => {
+            let object = parse_object(variables, inner);
+            let base = BuildStringExpr::String(object.base);
+
+            BuildObjectExpr {
+                base,
+                properties: object.properties,
+            }
+        }
+        x => unreachable!("{x:?}"),
+    }
 }
 
 pub fn parse_build_object(variables: &mut VarNames, pair: Pair<Rule>) -> BuildObjectExpr {
     let mut inner = pair.into_inner();
-    let base = parse_build_string_expr(variables, inner.next().unwrap());
+    let base = parse_build_fn(variables, inner.next().unwrap());
     let mut object = BuildObjectExpr::new(base);
 
     for value in inner {
-        let (id, expr) = parse_build_property_assignment(variables, value);
+        let (id, expr) = parse_property_assignment(variables, value);
         object.properties.insert(id, expr);
     }
 
     object
 }
 
-pub fn parse_build_property_assignment(
-    variables: &mut VarNames,
-    pair: Pair<Rule>,
-) -> (VarNameId, BuildStringExpr) {
-    let mut inner = pair.into_inner();
-    let ident = parse_ident(variables, inner.next().unwrap());
-    let expr = parse_build_string_expr(variables, inner.next().unwrap());
-
-    (ident, expr)
-}
-
-pub fn parse_build_string_expr(variables: &mut VarNames, pair: Pair<Rule>) -> BuildStringExpr {
-    let inner = pair.into_inner().next().unwrap();
-
-    match inner.as_rule() {
-        Rule::string_builder => BuildStringExpr::String(parse_string_builder(variables, inner)),
-        Rule::build_fn => {
-            let (template, name) = parse_build_fn(variables, inner);
-            BuildStringExpr::Build(template, name)
-        }
-        _ => unreachable!(),
-    }
-}
-
-pub fn parse_build_fn(variables: &mut VarNames, pair: Pair<Rule>) -> (StringExpr, StringExpr) {
+pub fn parse_build_fn(variables: &mut VarNames, pair: Pair<Rule>) -> BuildStringExpr {
     let mut inner = pair.into_inner();
     let template = inner.next().unwrap();
     let template = parse_string_builder(variables, template);
@@ -440,10 +453,8 @@ pub fn parse_build_fn(variables: &mut VarNames, pair: Pair<Rule>) -> (StringExpr
     let name = inner.next().unwrap();
     let name = parse_string_builder(variables, name);
 
-    (template, name)
+    BuildStringExpr::Build(template, name)
 }
-
-// pub fn parse_template_object(variables: &mut VarNames, pair: Pair<Rule>) ->
 
 // ======================= Templates ===========================
 
@@ -794,7 +805,7 @@ pub fn parse_range_expr(variables: &mut VarNames, pair: Pair<Rule>) -> RangeExpr
 pub fn parse_signed_integer(pair: Pair<Rule>) -> i64 {
     // let mut iter = pair.into_inner();
     // let value = iter.next().unwrap();
-    let value = pair; 
+    let value = pair;
 
     let (value_line, value_col) = value.line_col();
     let Ok(value) = value.as_str().parse() else {
