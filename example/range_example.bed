@@ -1,0 +1,40 @@
+[includes]
+"example/templates"
+
+[output]
+"example/builds"
+
+[globals]
+
+
+[template.pilot]
+
+[commands]
+limit 2;
+
+start = 20;
+end = 25;
+
+for i in [start]..[end] {
+    spawn 
+        stdout(example/out/ + [test] + .json)
+        ./target/release/test-bed
+        i [i]
+        ;
+}
+
+for j in [start]..30 {
+    spawn 
+        stdout(example/out/ + [test] + .json)
+        ./target/release/test-bed
+        j [j]
+        ;
+}
+
+for k in 22..[end] {
+    spawn 
+        stdout(example/out/ + [test] + .json)
+        ./target/release/test-bed
+        k [k]
+        ;
+}

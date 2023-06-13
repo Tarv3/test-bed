@@ -7,7 +7,7 @@ use std::{
 
 use indexmap::IndexSet;
 
-use crate::bed::expr::{ObjectExpr, VariableExpr};
+use crate::bed::expr::{ObjectExpr, StringExpr, VariableExpr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StackId(pub usize);
@@ -568,10 +568,44 @@ pub trait Executable<Command> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
+pub enum RangeExpr {
+    Integer(i64),
+    Variable(StringExpr),
+}
+
+impl RangeExpr {
+    pub fn evaluate(&self, state: &ProgramState) -> i64 {
+        match self {
+            RangeExpr::Integer(value) => *value,
+            RangeExpr::Variable(value) => {
+                let expr = value.evaluate(state);
+                expr.parse()
+                    .expect("Failed to convert range expression to int")
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum IterTargetExpr {
+    Variable(VarNameId),
+    Range { start: RangeExpr, end: RangeExpr },
+}
+
+impl IterTargetExpr {
+    pub fn to_itertarget(&self) -> IterTarget {
+        match self {
+            IterTargetExpr::Variable(id) => IterTarget::Variable(*id),
+            IterTargetExpr::Range { .. } => IterTarget::Range,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum IterTarget {
     Variable(VarNameId),
-    Range { start: i64, end: i64 },
+    Range,
 }
 
 #[derive(Clone, Debug)]
@@ -594,7 +628,7 @@ pub enum Instruction<T> {
     },
     StartIter {
         /// Id of the variable to iterate over
-        target: IterTarget,
+        target: IterTargetExpr,
         /// Id of the variable used inside the iter
         iter: VarNameId,
         jump: InstructionId,
@@ -707,7 +741,7 @@ impl<Command> Program<Command> {
                     }
                 }
                 Instruction::StartIter {
-                    target: IterTarget::Variable(target),
+                    target: IterTargetExpr::Variable(target),
                     iter,
                     jump,
                 } => match state.get_value(*target) {
@@ -752,10 +786,13 @@ impl<Command> Program<Command> {
                     }
                 }
                 Instruction::StartIter {
-                    target: IterTarget::Range { start, end },
+                    target: IterTargetExpr::Range { start, end },
                     iter,
                     jump,
                 } => {
+                    let start = start.evaluate(state);
+                    let end = end.evaluate(state);
+
                     if start >= end {
                         counter = **jump;
                         continue;
@@ -763,14 +800,14 @@ impl<Command> Program<Command> {
 
                     let var = Variable::Counter(Counter {
                         offset: 0,
-                        start: *start,
-                        end: *end,
+                        start,
+                        end,
                     });
                     let var = state.insert_var(*iter, var, None);
                     executable.set_iter(*iter, 0, var);
                 }
                 Instruction::Increment {
-                    target: IterTarget::Range { end, .. },
+                    target: IterTarget::Range,
                     iter,
                     jump,
                 } => {
@@ -785,10 +822,11 @@ impl<Command> Program<Command> {
                     let value = iter_var.as_counter();
                     value.offset += 1;
                     let idx = value.start + value.offset as i64;
+                    let end = value.end;
                     let offset = value.offset;
                     executable.set_iter(*iter, offset, iter_var);
 
-                    if idx >= *end {
+                    if idx >= end {
                         counter = **jump;
                         continue;
                     }

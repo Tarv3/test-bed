@@ -12,8 +12,8 @@ use crate::{
         templates::{BuildObjectExpr, BuildStringExpr, TemplateCommand},
     },
     program::{
-        Instruction, InstructionId, IterTarget, Program, VarFieldId, VarNameId, VarNames,
-        VariableIdx,
+        Instruction, InstructionId, IterTargetExpr, Program, RangeExpr, VarFieldId, VarNameId,
+        VarNames, VariableIdx,
     },
 };
 
@@ -75,12 +75,12 @@ impl Parsed {
 pub struct ForLoop {
     pub ty: ForLoopType,
     pub iters: Vec<VarNameId>,
-    pub targets: Vec<IterTarget>,
+    pub targets: Vec<IterTargetExpr>,
 }
 
 pub fn build_group_loop<T>(
     iters: &[VarNameId],
-    targets: &[IterTarget],
+    targets: &[IterTargetExpr],
     instructions: &mut Vec<Instruction<T>>,
     f: impl FnOnce(&mut Vec<Instruction<T>>),
 ) {
@@ -89,7 +89,7 @@ pub fn build_group_loop<T>(
 
     for (iter, target) in iters.iter().zip(targets.iter()) {
         instructions.push(Instruction::StartIter {
-            target: *target,
+            target: target.clone(),
             iter: *iter,
             jump: InstructionId(0),
         })
@@ -105,7 +105,7 @@ pub fn build_group_loop<T>(
 
     for (iter, target) in iters.iter().zip(targets.iter()) {
         instructions.push(Instruction::Increment {
-            target: *target,
+            target: target.to_itertarget(),
             iter: *iter,
             jump: InstructionId(0),
         })
@@ -130,7 +130,7 @@ pub fn build_group_loop<T>(
 
 pub fn build_combination_loop<T>(
     iters: &[VarNameId],
-    targets: &[IterTarget],
+    targets: &[IterTargetExpr],
     instructions: &mut Vec<Instruction<T>>,
     f: impl FnOnce(&mut Vec<Instruction<T>>),
 ) {
@@ -142,14 +142,14 @@ pub fn build_combination_loop<T>(
     }
 
     let this_iter = iters[0];
-    let this_target = targets[0];
+    let this_target = &targets[0];
     let remaining_iters = &iters[1..];
     let remaining_targets = &targets[1..];
 
     instructions.push(Instruction::PushScope);
     let iter_start = instructions.len();
     instructions.push(Instruction::StartIter {
-        target: this_target,
+        target: this_target.clone(),
         iter: this_iter,
         jump: InstructionId(0),
     });
@@ -160,7 +160,7 @@ pub fn build_combination_loop<T>(
 
     let increment_start = instructions.len();
     instructions.push(Instruction::Increment {
-        target: this_target,
+        target: this_target.to_itertarget(),
         iter: this_iter,
         jump: InstructionId(0),
     });
@@ -729,7 +729,10 @@ pub fn parse_ident_group(variables: &mut VarNames, pair: Pair<Rule>) -> Vec<VarN
     group
 }
 
-pub fn parse_iterable_group_group(variables: &mut VarNames, pair: Pair<Rule>) -> Vec<IterTarget> {
+pub fn parse_iterable_group_group(
+    variables: &mut VarNames,
+    pair: Pair<Rule>,
+) -> Vec<IterTargetExpr> {
     let mut group = vec![];
     let inner = pair.into_inner();
 
@@ -740,19 +743,18 @@ pub fn parse_iterable_group_group(variables: &mut VarNames, pair: Pair<Rule>) ->
     group
 }
 
-pub fn parse_iterable(variables: &mut VarNames, pair: Pair<Rule>) -> IterTarget {
+pub fn parse_iterable(variables: &mut VarNames, pair: Pair<Rule>) -> IterTargetExpr {
     let inner = pair.into_inner().next().unwrap();
 
     match inner.as_rule() {
         Rule::ident => {
             let ident = parse_ident(variables, inner);
 
-            IterTarget::Variable(ident)
+            IterTargetExpr::Variable(ident)
         }
         Rule::range => {
-            let (start, end) = parse_range(inner);
-
-            IterTarget::Range { start, end }
+            let (start, end) = parse_range(variables, inner);
+            IterTargetExpr::Range { start, end }
         }
         _ => {
             unreachable!()
@@ -760,29 +762,46 @@ pub fn parse_iterable(variables: &mut VarNames, pair: Pair<Rule>) -> IterTarget 
     }
 }
 
-pub fn parse_range(pair: Pair<Rule>) -> (i64, i64) {
+pub fn parse_range(variables: &mut VarNames, pair: Pair<Rule>) -> (RangeExpr, RangeExpr) {
     let mut iter = pair.into_inner();
     let start = iter.next().unwrap();
     let end = iter.next().unwrap();
 
-    let (start_line, start_col) = start.line_col();
-    let Ok(start) = start.as_str().parse() else {
-        panic!("Failed to parse start `{}`: [Line {}, Column {}]", start.as_str(), start_line, start_col);
-    };
-
-    let (line, col) = end.line_col();
-    let Ok(end) = end.as_str().parse() else {
-        panic!("Failed to parse end `{}`: [Line {}, Column {}]", end.as_str(), line, col);
-    };
-
-    if start >= end {
-        eprintln!(
-            "Warn: Start >= End ({}..{}): [Line {}, Column {}]",
-            start, end, start_line, start_col
-        );
-    }
+    let start = parse_range_expr(variables, start);
+    let end = parse_range_expr(variables, end);
 
     (start, end)
+}
+
+pub fn parse_range_expr(variables: &mut VarNames, pair: Pair<Rule>) -> RangeExpr {
+    let inner = pair.into_inner().next().unwrap();
+
+    match inner.as_rule() {
+        Rule::variable_access => {
+            let field_id = parse_variable_access(variables, inner);
+            let var = StringInstance::Variable(field_id);
+            let expr = StringExpr(vec![var]);
+            RangeExpr::Variable(expr)
+        }
+        Rule::signed_integer => {
+            let value = parse_signed_integer(inner);
+            RangeExpr::Integer(value)
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn parse_signed_integer(pair: Pair<Rule>) -> i64 {
+    // let mut iter = pair.into_inner();
+    // let value = iter.next().unwrap();
+    let value = pair; 
+
+    let (value_line, value_col) = value.line_col();
+    let Ok(value) = value.as_str().parse() else {
+        panic!("Failed to parse value `{}`: [Line {}, Column {}]", value.as_str(), value_line, value_col);
+    };
+
+    value
 }
 
 pub fn parse_variable_assignment<T>(variables: &mut VarNames, pair: Pair<Rule>) -> Instruction<T> {

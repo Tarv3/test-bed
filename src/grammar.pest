@@ -204,7 +204,7 @@ iterable = {
 }
 
 range = {
-    signed_integer ~ ".." ~ signed_integer
+    range_expr ~ ".." ~ range_expr
 }
 
 variable_assignment = {
@@ -249,6 +249,10 @@ object = {
 
 property_assignment = { 
     ident ~ "=" ~ string_builder
+}
+
+range_expr = {
+    "[" ~ variable_access ~ "]" | signed_integer
 }
 
 ident = @{ ident_char ~ (ident_char | integer)* }
