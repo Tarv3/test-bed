@@ -576,23 +576,28 @@ pub fn parse_wait_all(pair: Pair<Rule>) -> Option<u64> {
 
 pub fn parse_spawn(variables: &mut VarNames, pair: Pair<Rule>) -> Spawn {
     let mut inner = pair.into_inner();
-    let first = inner.next().unwrap();
 
-    let (out, err, command) = match first.as_rule() {
-        Rule::std_map => {
-            let (out, err) = parse_stdmap(variables, first);
-            let next = inner.next().unwrap();
-            let command = parse_string_builder(variables, next);
+    let mut working_dir = None;
+    let mut out = OutputMap::Print;
+    let mut err = OutputMap::Print;
 
-            (out, err, command)
+    let mut next = inner.next().unwrap();
+
+    while next.as_rule() != Rule::string_builder {
+        match next.as_rule() {
+            Rule::working_dir => {
+                working_dir = Some(parse_working_dir(variables, next));
+            }
+            Rule::std_map => {
+                (out, err) = parse_stdmap(variables, next);
+            }
+            _ => unreachable!(),
         }
-        Rule::string_builder => {
-            let command = parse_string_builder(variables, first);
-            (OutputMap::Print, OutputMap::Print, command)
-        }
-        _ => unreachable!(),
-    };
 
+        next = inner.next().unwrap();
+    }
+
+    let command = parse_string_builder(variables, next);
     let mut args = vec![];
 
     for value in inner {
@@ -601,6 +606,7 @@ pub fn parse_spawn(variables: &mut VarNames, pair: Pair<Rule>) -> Spawn {
 
     Spawn {
         command,
+        working_dir,
         args,
         stdout: out,
         stderr: err,
@@ -614,6 +620,14 @@ pub fn parse_arg_builder(variables: &mut VarNames, pair: Pair<Rule>) -> ArgBuild
         Rule::variable_access => ArgBuilder::Set(parse_variable_access(variables, inner)),
         _ => unreachable!(),
     }
+}
+
+pub fn parse_working_dir(variables: &mut VarNames, pair: Pair<Rule>) -> StringExpr {
+    let mut inner = pair.into_inner();
+    let inner = inner.next().unwrap();
+
+    let inner = inner.into_inner().next().unwrap();
+    parse_string_builder(variables, inner)
 }
 
 pub fn parse_stdmap(
@@ -809,7 +823,12 @@ pub fn parse_signed_integer(pair: Pair<Rule>) -> i64 {
 
     let (value_line, value_col) = value.line_col();
     let Ok(value) = value.as_str().parse() else {
-        panic!("Failed to parse value `{}`: [Line {}, Column {}]", value.as_str(), value_line, value_col);
+        panic!(
+            "Failed to parse value `{}`: [Line {}, Column {}]",
+            value.as_str(),
+            value_line,
+            value_col
+        );
     };
 
     value

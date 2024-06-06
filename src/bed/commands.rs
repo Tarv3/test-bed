@@ -54,6 +54,7 @@ impl ArgBuilder {
 
 #[derive(Clone, Debug)]
 pub struct Spawn {
+    pub working_dir: Option<StringExpr>,
     pub command: StringExpr,
     pub args: Vec<ArgBuilder>,
     pub stdout: OutputMap<StringExpr>,
@@ -69,6 +70,11 @@ impl Spawn {
             .add_args(self.args.iter().flat_map(|arg| arg.evaluate(state)))
             .set_stdout(self.stdout.map_ref(|value| value.evaluate(state).into()))
             .set_stderr(self.stderr.map_ref(|value| value.evaluate(state).into()));
+
+        if let Some(dir) = &self.working_dir {
+            let working_dir = dir.evaluate(state);
+            process.set_working_dir(working_dir.into());
+        }
 
         process
     }

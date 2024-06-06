@@ -212,6 +212,7 @@ pub struct ProcessInfo {
     pub args: Vec<String>,
     pub stdout: OutputMap<PathBuf>,
     pub stderr: OutputMap<PathBuf>,
+    pub working_dir: Option<PathBuf>,
     pub running: Option<ProcessStatus>,
 }
 
@@ -220,6 +221,7 @@ impl ProcessInfo {
         Self {
             command,
             args: vec![],
+            working_dir: None,
             stdout: OutputMap::Print,
             stderr: OutputMap::Print,
             running: None,
@@ -241,6 +243,11 @@ impl ProcessInfo {
         self
     }
 
+    pub fn set_working_dir(&mut self, out: PathBuf) -> &mut Self {
+        self.working_dir = Some(out);
+        self
+    }
+
     pub fn run(&mut self, idx: usize, multibar: &MultiProgress) -> io::Result<()> {
         let pat = ['/', '\\'];
 
@@ -257,6 +264,10 @@ impl ProcessInfo {
         process.args(self.args.iter());
         process.stdout(Stdio::piped());
         process.stderr(Stdio::piped());
+
+        if let Some(dir) = &self.working_dir {
+            process.current_dir(dir);
+        }
 
         let mut spawned = process.spawn()?;
         let stdout = spawned.stdout.take().unwrap();

@@ -135,7 +135,11 @@ wait_all = {
 }
 
 spawn = {
-    "spawn" ~ std_map? ~ string_builder ~ (arg_builder)*
+    "spawn" ~ working_dir? ~ std_map? ~ string_builder ~ (arg_builder)*
+}
+
+working_dir = {
+    "dir(" ~ string_builder ~ ")"
 }
 
 std_map = {
