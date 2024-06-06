@@ -139,7 +139,11 @@ spawn = {
 }
 
 working_dir = {
-    "dir(" ~ string_builder ~ ")"
+    "dir("
+    ~
+    string_builder
+    ~
+    ")"
 }
 
 std_map = {
@@ -160,7 +164,6 @@ stdout_map = {
     output_map
     ~
     ")"
-
 }
 
 output_map = {

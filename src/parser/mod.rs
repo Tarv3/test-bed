@@ -626,7 +626,6 @@ pub fn parse_working_dir(variables: &mut VarNames, pair: Pair<Rule>) -> StringEx
     let mut inner = pair.into_inner();
     let inner = inner.next().unwrap();
 
-    let inner = inner.into_inner().next().unwrap();
     parse_string_builder(variables, inner)
 }
 
