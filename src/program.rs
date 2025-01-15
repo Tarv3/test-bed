@@ -6,6 +6,10 @@ use std::{
 };
 
 use indexmap::IndexSet;
+use serde::{
+    ser::{SerializeMap, SerializeSeq},
+    Serialize,
+};
 
 use crate::bed::expr::{ObjectExpr, StringExpr, VariableExpr};
 
@@ -104,6 +108,66 @@ impl Object {
             base,
             properties: HashMap::new(),
         }
+    }
+
+    pub fn to_serialize<'a>(&'a self, names: &'a VarNames) -> ObjectSerialize<'a> {
+        ObjectSerialize {
+            base: &self.base,
+            properties: &self.properties,
+            names,
+        }
+    }
+}
+
+pub struct ObjectSerialize<'a> {
+    base: &'a str,
+    properties: &'a HashMap<VarNameId, String>,
+    names: &'a VarNames,
+}
+
+impl<'a> Serialize for ObjectSerialize<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if self.properties.is_empty() {
+            return self.base.serialize(serializer);
+        }
+
+        let mut map_serialize = serializer.serialize_map(Some(2))?;
+        map_serialize.serialize_entry(&"base", self.base)?;
+        map_serialize.serialize_entry(
+            &"properties",
+            &PropertiesSerialize {
+                properties: self.properties,
+                names: self.names,
+            },
+        )?;
+
+        map_serialize.end()
+    }
+}
+
+struct PropertiesSerialize<'a> {
+    properties: &'a HashMap<VarNameId, String>,
+    names: &'a VarNames,
+}
+
+impl<'a> Serialize for PropertiesSerialize<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map_serialize = serializer.serialize_map(Some(self.properties.len()))?;
+
+        for (key, value) in self.properties.iter() {
+            let Some(name) = self.names.evaluate(*key) else {
+                return Err(serde::ser::Error::custom("Missing name for key"));
+            };
+            map_serialize.serialize_entry(name, value)?;
+        }
+
+        map_serialize.end()
     }
 }
 
@@ -218,6 +282,51 @@ impl Variable {
         match self {
             Variable::Counter(value) => value,
             _ => panic!("Tried to get non-ref value as VariableRef"),
+        }
+    }
+
+    pub fn to_serialize<'a>(
+        &'a self,
+        state: &'a ProgramState,
+        names: &'a VarNames,
+    ) -> VariableSerialize<'a> {
+        VariableSerialize {
+            variable: self,
+            state,
+            names,
+        }
+    }
+}
+
+pub struct VariableSerialize<'a> {
+    variable: &'a Variable,
+    state: &'a ProgramState,
+    names: &'a VarNames,
+}
+
+impl<'a> Serialize for VariableSerialize<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self.variable {
+            Variable::Counter(counter) => serializer.serialize_i64(counter.idx()),
+            Variable::Ref(variable_ref) => {
+                let Some(object) = self.state.evaluate_ref(*variable_ref) else {
+                    return Err(serde::ser::Error::custom("Missing referenced object"));
+                };
+
+                object.to_serialize(self.names).serialize(serializer)
+            }
+            Variable::Object(object) => object.to_serialize(self.names).serialize(serializer),
+            Variable::List(vec) => {
+                let mut seq_serializer = serializer.serialize_seq(Some(vec.len()))?;
+                for value in vec.iter() {
+                    seq_serializer.serialize_element(&value.to_serialize(self.names))?;
+                }
+
+                seq_serializer.end()
+            }
         }
     }
 }

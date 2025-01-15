@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt::Display, io::ErrorKind, path::PathBuf};
 
 use minijinja::{Environment, Source};
 
-use crate::program::{Object, ProgramState, VarNameId, VarNames, Variable};
+use crate::program::{Object, ProgramState, VarNameId, VarNames, Variable, VariableSerialize};
 
 use super::expr::StringExpr;
 
@@ -43,7 +43,6 @@ impl Display for TemplateBuildError {
 
 pub struct TemplateBuilder<'source> {
     pub environment: Environment<'source>,
-    current_params: HashMap<String, String>,
     output: PathBuf,
 }
 
@@ -69,7 +68,6 @@ impl<'source> TemplateBuilder<'source> {
 
         Self {
             environment: env,
-            current_params: HashMap::new(),
             output,
         }
     }
@@ -78,7 +76,7 @@ impl<'source> TemplateBuilder<'source> {
         &mut self,
         template_path: String,
         output_name: String,
-        state: &mut ProgramState,
+        state: &ProgramState,
         names: &VarNames,
     ) -> Result<String, TemplateBuildError> {
         let template = match self.environment.get_template(&template_path) {
@@ -88,7 +86,8 @@ impl<'source> TemplateBuilder<'source> {
             }
         };
 
-        self.current_params.clear();
+        let mut current_params: HashMap<&str, VariableSerialize> = Default::default();
+        // self.current_params.clear();
 
         for scope in state.scopes.iter().rev() {
             for (name, value) in scope.0.iter() {
@@ -97,21 +96,12 @@ impl<'source> TemplateBuilder<'source> {
                     None => continue,
                 };
 
-                if self.current_params.contains_key(name) {
+                if current_params.contains_key(name) {
                     continue;
                 }
 
-                let value = match value {
-                    crate::program::Variable::Counter(value) => format!("{}", value.idx()),
-                    crate::program::Variable::List(_) => continue,
-                    crate::program::Variable::Ref(value) => match state.evaluate_ref(*value) {
-                        Some(object) => object.base.clone(),
-                        None => continue,
-                    },
-                    crate::program::Variable::Object(object) => object.base.clone(),
-                };
-
-                self.current_params.insert(name.into(), value);
+                let value = value.to_serialize(state, names);
+                current_params.insert(name, value);
             }
         }
 
@@ -129,7 +119,7 @@ impl<'source> TemplateBuilder<'source> {
             }
         };
 
-        let rendered = match template.render(&self.current_params) {
+        let rendered = match template.render(&current_params) {
             Ok(rendered) => rendered,
             Err(e) => {
                 return Err(TemplateBuildError {
