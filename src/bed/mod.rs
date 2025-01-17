@@ -6,7 +6,7 @@ use std::{
 
 use indicatif::{MultiProgress, ProgressDrawTarget};
 
-use crate::program::{Executable, ProgramState, VarNameId, VarNames, Variable};
+use crate::program::{Executable, Object, ProgramState, VarNameId, VarNames, VariableAccessError};
 
 use self::{
     commands::Command,
@@ -111,7 +111,9 @@ impl<'source> TestBed<'source> {
     }
 
     fn write_progress(&mut self) {
-        let Some(file) = &mut self.progress_file else { return };
+        let Some(file) = &mut self.progress_file else {
+            return;
+        };
         let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
         file.seek(std::io::SeekFrom::Start(0))
             .expect("Failed to seek file");
@@ -157,7 +159,7 @@ impl<'source> Executable<Command> for TestBed<'source> {
         command: &Command,
         stack: &mut ProgramState,
         shutdown: &crate::program::Shutdown,
-    ) {
+    ) -> Result<(), VariableAccessError> {
         match command {
             Command::LimitSpawn(limit) => self.spawn_limit = Some(*limit),
             Command::Sleep(millis) => {
@@ -181,12 +183,12 @@ impl<'source> Executable<Command> for TestBed<'source> {
                 self.iters.iter().for_each(|value| value.1.update());
                 self.write_progress();
 
-                let mut process = spawn.evaluate(stack);
+                let mut process = spawn.evaluate(stack)?;
                 if let Err(e) = process.run(self.iters.len(), &self.multibar) {
                     self.multibar
                         .println(&format!("Failed to spawn {}: {e}", process.command))
                         .ok();
-                    return;
+                    return Ok(());
                 }
 
                 self.processes.push(process);
@@ -195,10 +197,17 @@ impl<'source> Executable<Command> for TestBed<'source> {
                 self.wait_all(*timeout, 0, shutdown);
             }
         }
+
+        Ok(())
     }
 
-    fn set_iter(&mut self, iter_var: VarNameId, idx: usize, var: &Variable) {
-        let len = var.len().unwrap_or(0) as u64;
+    fn set_iter(&mut self, iter_var: VarNameId, idx: usize, var: &Object) {
+        let len = match var {
+            Object::Counter(counter) => counter.len(),
+            Object::List(vec) => vec.len(),
+            _ => 0,
+        };
+        let len = len as u64;
         let bar = match self.iters.iter_mut().find(|(id, _)| *id == iter_var) {
             Some((_, bar)) => bar,
             None => {
@@ -212,17 +221,15 @@ impl<'source> Executable<Command> for TestBed<'source> {
         bar.set(idx as u64);
 
         match var {
-            Variable::Object(value) => {
+            Object::Struct(value) => {
                 bar.set_message(&value.base);
             }
-            Variable::List(list) => {
-                if let Some(value) = list.get(idx) {
+            Object::List(list) => {
+                if let Some(Object::Struct(value)) = list.get(idx) {
                     bar.set_message(&value.base);
                 }
             }
-            Variable::Counter(counter) => {
-                bar.set_message(&format!("{}", counter.idx()))
-            }
+            Object::Counter(counter) => bar.set_message(&format!("{}", counter.idx())),
             _ => {}
         }
     }
@@ -238,14 +245,15 @@ impl<'source> Executable<TemplateCommand> for TestBed<'source> {
         command: &TemplateCommand,
         state: &mut ProgramState,
         _: &crate::program::Shutdown,
-    ) {
+    ) -> Result<(), VariableAccessError> {
         let err = match command {
             TemplateCommand::BuildAssign { output, object } => {
                 match object.evaluate(state, &mut self.templates, &self.var_names) {
                     Ok(object) => {
-                        state.insert_var(*output, Variable::Object(object), None);
-                        return;
+                        state.insert_var(*output, object, None);
+                        return Ok(());
                     }
+                    Err(templates::TemplateBuildError::VariableError(e)) => return Err(e),
                     Err(e) => e,
                 }
             }
@@ -254,14 +262,15 @@ impl<'source> Executable<TemplateCommand> for TestBed<'source> {
                 match object.evaluate(state, &mut self.templates, &self.var_names) {
                     Ok(object) => {
                         yield_value(*output, object, state);
-                        return;
+                        return Ok(());
                     }
+                    Err(templates::TemplateBuildError::VariableError(e)) => return Err(e),
                     Err(e) => e,
                 }
             }
         };
 
         println!("{err}\n");
-        return;
+        return Ok(());
     }
 }

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
 };
 
@@ -8,13 +8,10 @@ use pest::{iterators::Pair, Parser};
 use crate::{
     bed::{
         commands::{ArgBuilder, Command, OutputMap, Spawn},
-        expr::{ObjectExpr, StringExpr, StringInstance, VariableExpr},
-        templates::{BuildObjectExpr, BuildStringExpr, TemplateCommand},
+        expr::{IterTargetExpr, ObjectExpr, RangeExpr, StringExpr, StringInstance, StructExpr},
+        templates::{BuildObjectExpr, BuildStringExpr, TemplateCommand, YieldExpr},
     },
-    program::{
-        Instruction, InstructionId, IterTargetExpr, Program, RangeExpr, VarFieldId, VarNameId,
-        VarNames, VariableIdx,
-    },
+    program::{Instruction, InstructionId, Program, VarFieldId, VarNameId, VarNames, VariableIdx},
 };
 
 use self::{commands::build_commands_program, templates::build_templates_program};
@@ -409,25 +406,17 @@ pub fn parse_build_assignment(
     (ident, object)
 }
 
-pub fn parse_yield_template(variables: &mut VarNames, pair: Pair<Rule>) -> BuildObjectExpr {
+pub fn parse_yield_template(variables: &mut VarNames, pair: Pair<Rule>) -> YieldExpr {
     let inner = pair.into_inner().next().unwrap();
     parse_yield_object(variables, inner)
 }
 
-pub fn parse_yield_object(variables: &mut VarNames, pair: Pair<Rule>) -> BuildObjectExpr {
+pub fn parse_yield_object(variables: &mut VarNames, pair: Pair<Rule>) -> YieldExpr {
     let inner = pair.into_inner().next().unwrap();
 
     match inner.as_rule() {
-        Rule::build_object => parse_build_object(variables, inner),
-        Rule::object => {
-            let object = parse_object(variables, inner);
-            let base = BuildStringExpr::String(object.base);
-
-            BuildObjectExpr {
-                base,
-                properties: object.properties,
-            }
-        }
+        Rule::build_object => YieldExpr::Build(parse_build_object(variables, inner)),
+        Rule::object => YieldExpr::Object(parse_object_expr(variables, inner)),
         x => unreachable!("{x:?}"),
     }
 }
@@ -453,7 +442,10 @@ pub fn parse_build_fn(variables: &mut VarNames, pair: Pair<Rule>) -> BuildString
     let name = inner.next().unwrap();
     let name = parse_string_builder(variables, name);
 
-    BuildStringExpr::Build(template, name)
+    BuildStringExpr {
+        template,
+        output: name,
+    }
 }
 
 // ======================= Templates ===========================
@@ -837,7 +829,7 @@ pub fn parse_variable_assignment<T>(variables: &mut VarNames, pair: Pair<Rule>) 
     let mut inner = pair.into_inner();
     let ident = parse_ident(variables, inner.next().unwrap());
     let create = parse_variable_assign_op(inner.next().unwrap());
-    let expr = parse_variable_expression(variables, inner.next().unwrap());
+    let expr = parse_object_expr(variables, inner.next().unwrap());
 
     match create {
         true => Instruction::CreateVar {
@@ -864,24 +856,12 @@ pub fn parse_variable_assign_op(pair: Pair<Rule>) -> bool {
     }
 }
 
-pub fn parse_variable_expression(variables: &mut VarNames, pair: Pair<Rule>) -> VariableExpr {
-    let inner = pair.into_inner().next().unwrap();
-
-    match inner.as_rule() {
-        Rule::object => VariableExpr::Object(parse_object(variables, inner)),
-        Rule::list_expression => VariableExpr::List(parse_list_expression(variables, inner)),
-        _ => {
-            unreachable!()
-        }
-    }
-}
-
 pub fn parse_list_expression(variables: &mut VarNames, pair: Pair<Rule>) -> Vec<ObjectExpr> {
     let inner = pair.into_inner();
     let mut objects = vec![];
 
     for value in inner {
-        objects.push(parse_object(variables, value));
+        objects.push(parse_object_expr(variables, value));
     }
 
     objects
@@ -893,37 +873,60 @@ pub fn parse_push(variables: &mut VarNames, pair: Pair<Rule>) -> (VarNameId, Obj
     let ident = parse_ident(variables, ident);
 
     let object = inner.next().unwrap();
-    let object = parse_object(variables, object);
+    let object = parse_object_expr(variables, object);
 
     (ident, object)
 }
 
-pub fn parse_object(variables: &mut VarNames, pair: Pair<Rule>) -> ObjectExpr {
+pub fn parse_object_expr(variables: &mut VarNames, pair: Pair<Rule>) -> ObjectExpr {
     let mut inner = pair.into_inner();
+    let inner = inner.next().unwrap();
 
-    let base = inner.next().unwrap();
-    let base = parse_string_builder(variables, base);
-    let mut object = ObjectExpr::new(base);
-
-    for value in inner {
-        let (id, value) = parse_property_assignment(variables, value);
-        object.properties.insert(id, value);
-    }
+    let object = match inner.as_rule() {
+        Rule::variable_clone => ObjectExpr::Clone(parse_variable_clone(variables, inner)),
+        Rule::list_expression => ObjectExpr::List(parse_list_expression(variables, inner)),
+        Rule::struct_expr => ObjectExpr::Struct(parse_struct_expression(variables, inner)),
+        Rule::range => {
+            let (min, max) = parse_range(variables, inner);
+            ObjectExpr::Counter(min, max)
+        }
+        x => unreachable!("{x:?}"),
+    };
 
     object
+}
+
+pub fn parse_struct_expression(variables: &mut VarNames, pair: Pair<Rule>) -> StructExpr {
+    let mut inner = pair.into_inner();
+    let base = inner.next().unwrap();
+    let base = parse_string_builder(variables, base);
+    let mut properties = HashMap::new();
+
+    for value in inner {
+        let (name, expr) = parse_property_assignment(variables, value);
+        properties.insert(name, expr);
+    }
+
+    StructExpr { base, properties }
+}
+
+pub fn parse_variable_clone(variables: &mut VarNames, pair: Pair<Rule>) -> VarFieldId {
+    let mut inner = pair.into_inner();
+    let base = inner.next().unwrap();
+    parse_variable_access(variables, base)
 }
 
 pub fn parse_property_assignment(
     variables: &mut VarNames,
     pair: Pair<Rule>,
-) -> (VarNameId, StringExpr) {
+) -> (VarNameId, ObjectExpr) {
     let mut inner = pair.into_inner();
 
     let ident = inner.next().unwrap();
     let ident = parse_ident(variables, ident);
 
-    let string_builder = inner.next().unwrap();
-    let expr = parse_string_builder(variables, string_builder);
+    let object = inner.next().unwrap();
+    let expr = parse_object_expr(variables, object);
 
     (ident, expr)
 }
@@ -967,20 +970,23 @@ pub fn parse_string_instance(variables: &mut VarNames, pair: Pair<Rule>) -> Stri
 pub fn parse_variable_access(variables: &mut VarNames, pair: Pair<Rule>) -> VarFieldId {
     let mut inner = pair.into_inner();
     let variable = inner.next().unwrap();
+    let mut access = parse_immediate_variable_access(variables, variable);
+
+    if let Some(value) = inner.next() {
+        access.field = Some(Box::new(parse_variable_access(variables, value)))
+    }
+
+    access
+}
+
+pub fn parse_immediate_variable_access(variables: &mut VarNames, pair: Pair<Rule>) -> VarFieldId {
+    let mut inner = pair.into_inner();
+    let variable = inner.next().unwrap();
     let ident = parse_ident(variables, variable);
     let mut access = VarFieldId::new(ident);
 
-    for value in inner {
-        match value.as_rule() {
-            Rule::variable_idx => {
-                access.idx = Some(Box::new(parse_variable_idx(variables, value)));
-            }
-            Rule::ident => {
-                let field = parse_ident(variables, value);
-                access.field = Some(field);
-            }
-            _ => unreachable!(),
-        }
+    if let Some(value) = inner.next() {
+        access.idx = Some(Box::new(parse_variable_idx(variables, value)))
     }
 
     access

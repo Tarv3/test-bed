@@ -215,15 +215,11 @@ range = {
 }
 
 variable_assignment = {
-    ident ~ variable_assign_op ~ variable_expression
+    ident ~ variable_assign_op ~ object
 }
 
 push = {
     ident ~ "." ~ "push" ~ "(" ~ object ~ ")" 
-}
-
-variable_expression = {
-    (object | list_expression)
 }
 
 list_expression = {
@@ -243,19 +239,31 @@ variable_assign = {
 }
 
 variable_access = {
-    ident ~ ("[" ~ variable_idx ~ "]")? ~ ( "." ~ ident)?
+    immediate_variable_access ~ ( "." ~ variable_access)?
+}
+
+immediate_variable_access = {
+    ident ~ ("[" ~ variable_idx ~ "]")?
+}
+
+variable_clone = {
+    "*" ~ variable_access
 }
 
 variable_idx = {
     integer | variable_access
 }
 
-object = {
+struct_expr = {
     ("(" ~ string_builder ~ ("," ~ property_assignment)* ~ ","? ~ ")") | string_builder
 }
 
+object = {
+    variable_clone | list_expression | struct_expr | range
+}
+
 property_assignment = { 
-    ident ~ "=" ~ string_builder
+    ident ~ "=" ~ object
 }
 
 range_expr = {

@@ -11,7 +11,7 @@ use serde::{
     Serialize,
 };
 
-use crate::bed::expr::{ObjectExpr, StringExpr, VariableExpr};
+use crate::bed::expr::{IterTargetExpr, ObjectExpr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StackId(pub usize);
@@ -97,31 +97,75 @@ impl VarNames {
 }
 
 #[derive(Clone, Debug)]
-pub struct Object {
+pub struct Struct {
     pub base: String,
-    pub properties: HashMap<VarNameId, String>,
+    pub properties: HashMap<VarNameId, Object>,
+}
+
+impl Struct {
+    pub fn new(base: String, properties: HashMap<VarNameId, Object>) -> Self {
+        Self { base, properties }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Object {
+    Counter(Counter),
+    Ref(VariableRef),
+    Struct(Struct),
+    List(Vec<Object>),
 }
 
 impl Object {
     pub fn new(base: String) -> Self {
-        Self {
+        Self::Struct(Struct {
             base,
             properties: HashMap::new(),
-        }
+        })
     }
 
-    pub fn to_serialize<'a>(&'a self, names: &'a VarNames) -> ObjectSerialize<'a> {
+    pub fn write_to_string<'a>(
+        &'a self,
+        state: &'a ProgramState,
+        mut into: impl std::fmt::Write,
+    ) -> Result<(), VariableAccessError> {
+        match self {
+            Object::Struct(value) => {
+                write!(into, "{}", &value.base).unwrap();
+            }
+            Object::Ref(variable_ref) => state
+                .evaluate_ref(*variable_ref)
+                .unwrap()
+                .write_to_string(state, into)?,
+            Object::Counter(counter) => {
+                write!(into, "{}", counter.idx()).unwrap();
+            }
+            Object::List(_) => return Err(VariableAccessError::NotAStruct),
+        }
+
+        Ok(())
+    }
+
+    pub fn to_serialize<'a>(
+        &'a self,
+        program: &'a ProgramState,
+        names: &'a VarNames,
+    ) -> ObjectSerialize<'a> {
         ObjectSerialize {
-            base: &self.base,
-            properties: &self.properties,
+            object: &self,
+            // base: &self.base,
+            // properties: &self.properties,
+            program,
             names,
         }
     }
 }
 
 pub struct ObjectSerialize<'a> {
-    base: &'a str,
-    properties: &'a HashMap<VarNameId, String>,
+    object: &'a Object,
+    // base: &'a str,
+    // properties: &'a HashMap<VarNameId, Object>,
+    program: &'a ProgramState,
     names: &'a VarNames,
 }
 
@@ -130,26 +174,52 @@ impl<'a> Serialize for ObjectSerialize<'a> {
     where
         S: serde::Serializer,
     {
-        if self.properties.is_empty() {
-            return self.base.serialize(serializer);
+        match self.object {
+            Object::Counter(counter) => return serializer.serialize_i64(counter.idx()),
+            Object::Ref(variable_ref) => {
+                let Some(object) = self.program.evaluate_ref(*variable_ref) else {
+                    return Err(serde::ser::Error::custom(
+                        "Failed to evaluate variable reference",
+                    ));
+                };
+
+                return object
+                    .to_serialize(&self.program, &self.names)
+                    .serialize(serializer);
+            }
+            Object::Struct(value) => {
+                if value.properties.is_empty() {
+                    return value.base.serialize(serializer);
+                }
+
+                let mut map_serialize = serializer.serialize_map(Some(2))?;
+                map_serialize.serialize_entry(&"base", &value.base)?;
+                map_serialize.serialize_entry(
+                    &"properties",
+                    &PropertiesSerialize {
+                        properties: &value.properties,
+                        program: self.program,
+                        names: self.names,
+                    },
+                )?;
+
+                return map_serialize.end();
+            }
+            Object::List(vec) => {
+                let mut seq_serialize = serializer.serialize_seq(Some(vec.len()))?;
+                for value in vec.iter() {
+                    seq_serialize
+                        .serialize_element(&value.to_serialize(&self.program, &self.names))?;
+                }
+                return seq_serialize.end();
+            }
         }
-
-        let mut map_serialize = serializer.serialize_map(Some(2))?;
-        map_serialize.serialize_entry(&"base", self.base)?;
-        map_serialize.serialize_entry(
-            &"properties",
-            &PropertiesSerialize {
-                properties: self.properties,
-                names: self.names,
-            },
-        )?;
-
-        map_serialize.end()
     }
 }
 
 struct PropertiesSerialize<'a> {
-    properties: &'a HashMap<VarNameId, String>,
+    properties: &'a HashMap<VarNameId, Object>,
+    program: &'a ProgramState,
     names: &'a VarNames,
 }
 
@@ -164,22 +234,24 @@ impl<'a> Serialize for PropertiesSerialize<'a> {
             let Some(name) = self.names.evaluate(*key) else {
                 return Err(serde::ser::Error::custom("Missing name for key"));
             };
-            map_serialize.serialize_entry(name, value)?;
+            let serialize = value.to_serialize(self.program, self.names);
+            map_serialize.serialize_entry(name, &serialize)?;
         }
 
         map_serialize.end()
     }
 }
 
-pub enum VariableDeref<'a> {
-    Object(&'a Object),
-    Counter(&'a Counter),
-}
+// pub enum VariableDeref<'a> {
+//     Object(&'a Object),
+//     Counter(&'a Counter),
+// }
 
-pub enum VariableField<'a> {
-    String(&'a str),
-    Idx(i64),
-}
+// pub enum VariableField<'a> {
+//     // String(&'a str),
+//     Object(&'a Object),
+//     Idx(i64),
+// }
 
 #[derive(Clone, Copy, Debug)]
 pub struct VariableRef {
@@ -210,129 +282,129 @@ impl Counter {
     }
 }
 
+// #[derive(Clone, Debug)]
+// pub enum Variable {
+//     Counter(Counter),
+//     Ref(VariableRef),
+//     Object(Object),
+//     List(Vec<Object>),
+// }
+
+// impl Variable {
+//     pub fn is_ref(&self) -> bool {
+//         match self {
+//             Variable::Ref(_) => true,
+//             _ => false,
+//         }
+//     }
+
+//     pub fn is_counter(&self) -> bool {
+//         match self {
+//             Variable::Counter(_) => true,
+//             _ => false,
+//         }
+//     }
+
+//     pub fn len(&self) -> Option<usize> {
+//         match self {
+//             Variable::Counter(value) => Some(value.len()),
+//             Variable::Ref(_) => None,
+//             Variable::Object(_) => Some(1),
+//             Variable::List(list) => Some(list.len()),
+//         }
+//     }
+
+//     pub fn is_list(&self) -> bool {
+//         match self {
+//             Variable::List(_) => true,
+//             _ => false,
+//         }
+//     }
+
+//     pub fn take_obj(self) -> Object {
+//         match self {
+//             Variable::Object(value) => value,
+//             _ => panic!("Tried to get non-object value as Object"),
+//         }
+//     }
+
+//     #[allow(dead_code)]
+//     pub fn as_obj(&mut self) -> &mut Object {
+//         match self {
+//             Variable::Object(value) => value,
+//             _ => panic!("Tried to get non-object value as Object"),
+//         }
+//     }
+
+//     pub fn as_list(&mut self) -> &mut Vec<Object> {
+//         match self {
+//             Variable::List(value) => value,
+//             _ => panic!("Tried to get non-list value as List"),
+//         }
+//     }
+
+//     pub fn as_ref(&mut self) -> &mut VariableRef {
+//         match self {
+//             Variable::Ref(value) => value,
+//             _ => panic!("Tried to get non-ref value as VariableRef"),
+//         }
+//     }
+
+//     pub fn as_counter(&mut self) -> &mut Counter {
+//         match self {
+//             Variable::Counter(value) => value,
+//             _ => panic!("Tried to get non-ref value as VariableRef"),
+//         }
+//     }
+
+//     pub fn to_serialize<'a>(
+//         &'a self,
+//         state: &'a ProgramState,
+//         names: &'a VarNames,
+//     ) -> VariableSerialize<'a> {
+//         VariableSerialize {
+//             variable: self,
+//             state,
+//             names,
+//         }
+//     }
+// }
+
+// pub struct VariableSerialize<'a> {
+//     variable: &'a Variable,
+//     state: &'a ProgramState,
+//     names: &'a VarNames,
+// }
+
+// impl<'a> Serialize for VariableSerialize<'a> {
+//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+//     where
+//         S: serde::Serializer,
+//     {
+//         match self.variable {
+//             Variable::Counter(counter) => serializer.serialize_i64(counter.idx()),
+//             Variable::Ref(variable_ref) => {
+//                 let Some(object) = self.state.evaluate_ref(*variable_ref) else {
+//                     return Err(serde::ser::Error::custom("Missing referenced object"));
+//                 };
+
+//                 object.to_serialize(self.names).serialize(serializer)
+//             }
+//             Variable::Object(object) => object.to_serialize(self.names).serialize(serializer),
+//             Variable::List(vec) => {
+//                 let mut seq_serializer = serializer.serialize_seq(Some(vec.len()))?;
+//                 for value in vec.iter() {
+//                     seq_serializer.serialize_element(&value.to_serialize(self.names))?;
+//                 }
+
+//                 seq_serializer.end()
+//             }
+//         }
+//     }
+// }
+
 #[derive(Clone, Debug)]
-pub enum Variable {
-    Counter(Counter),
-    Ref(VariableRef),
-    Object(Object),
-    List(Vec<Object>),
-}
-
-impl Variable {
-    pub fn is_ref(&self) -> bool {
-        match self {
-            Variable::Ref(_) => true,
-            _ => false,
-        }
-    }
-
-    pub fn is_counter(&self) -> bool {
-        match self {
-            Variable::Counter(_) => true,
-            _ => false,
-        }
-    }
-
-    pub fn len(&self) -> Option<usize> {
-        match self {
-            Variable::Counter(value) => Some(value.len()),
-            Variable::Ref(_) => None,
-            Variable::Object(_) => Some(1),
-            Variable::List(list) => Some(list.len()),
-        }
-    }
-
-    pub fn is_list(&self) -> bool {
-        match self {
-            Variable::List(_) => true,
-            _ => false,
-        }
-    }
-
-    pub fn take_obj(self) -> Object {
-        match self {
-            Variable::Object(value) => value,
-            _ => panic!("Tried to get non-object value as Object"),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn as_obj(&mut self) -> &mut Object {
-        match self {
-            Variable::Object(value) => value,
-            _ => panic!("Tried to get non-object value as Object"),
-        }
-    }
-
-    pub fn as_list(&mut self) -> &mut Vec<Object> {
-        match self {
-            Variable::List(value) => value,
-            _ => panic!("Tried to get non-list value as List"),
-        }
-    }
-
-    pub fn as_ref(&mut self) -> &mut VariableRef {
-        match self {
-            Variable::Ref(value) => value,
-            _ => panic!("Tried to get non-ref value as VariableRef"),
-        }
-    }
-
-    pub fn as_counter(&mut self) -> &mut Counter {
-        match self {
-            Variable::Counter(value) => value,
-            _ => panic!("Tried to get non-ref value as VariableRef"),
-        }
-    }
-
-    pub fn to_serialize<'a>(
-        &'a self,
-        state: &'a ProgramState,
-        names: &'a VarNames,
-    ) -> VariableSerialize<'a> {
-        VariableSerialize {
-            variable: self,
-            state,
-            names,
-        }
-    }
-}
-
-pub struct VariableSerialize<'a> {
-    variable: &'a Variable,
-    state: &'a ProgramState,
-    names: &'a VarNames,
-}
-
-impl<'a> Serialize for VariableSerialize<'a> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self.variable {
-            Variable::Counter(counter) => serializer.serialize_i64(counter.idx()),
-            Variable::Ref(variable_ref) => {
-                let Some(object) = self.state.evaluate_ref(*variable_ref) else {
-                    return Err(serde::ser::Error::custom("Missing referenced object"));
-                };
-
-                object.to_serialize(self.names).serialize(serializer)
-            }
-            Variable::Object(object) => object.to_serialize(self.names).serialize(serializer),
-            Variable::List(vec) => {
-                let mut seq_serializer = serializer.serialize_seq(Some(vec.len()))?;
-                for value in vec.iter() {
-                    seq_serializer.serialize_element(&value.to_serialize(self.names))?;
-                }
-
-                seq_serializer.end()
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Scope(pub HashMap<VarNameId, Variable>);
+pub struct Scope(pub HashMap<VarNameId, Object>);
 
 #[derive(Clone, Debug)]
 pub enum VariableIdx {
@@ -344,7 +416,7 @@ pub enum VariableIdx {
 pub struct VarFieldId {
     pub var: VarNameId,
     pub idx: Option<Box<VariableIdx>>,
-    pub field: Option<VarNameId>,
+    pub field: Option<Box<VarFieldId>>,
 }
 
 impl VarFieldId {
@@ -355,41 +427,59 @@ impl VarFieldId {
             field: None,
         }
     }
-}
 
-#[derive(Clone, Copy)]
-pub enum VarIter<I, T>
-where
-    I: Iterator<Item = T>,
-{
-    Single(T),
-    List(I),
-    None,
-}
-
-impl<I, T> Iterator for VarIter<I, T>
-where
-    I: Iterator<Item = T>,
-{
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let value = std::mem::replace(self, VarIter::None);
-
-        match value {
-            VarIter::Single(value) => {
-                let to_return = value;
-                Some(to_return)
-            }
-            VarIter::List(mut value) => {
-                let next = value.next();
-                if next.is_some() {
-                    *self = VarIter::List(value);
+    pub fn get_value<'a>(
+        &self,
+        program: &'a ProgramState,
+        object: &'a Object,
+    ) -> Result<&'a Object, VariableAccessError> {
+        let properties = match object {
+            Object::Struct(value) => &value.properties,
+            Object::Ref(value) => match program.evaluate_ref(*value).unwrap() {
+                Object::Struct(value) => &value.properties,
+                _x => {
+                    return Err(VariableAccessError::NotAStruct);
                 }
-                next
+            },
+            _x => {
+                return Err(VariableAccessError::NotAStruct);
             }
-            VarIter::None => None,
+        };
+
+        let Some(mut output) = properties.get(&self.var) else {
+            return Err(VariableAccessError::MissingField(self.var));
+        };
+
+        if let Some(idx) = &self.idx {
+            let Object::List(list) = output else {
+                return Err(VariableAccessError::NotAList);
+            };
+
+            let idx = program.evaluate_idx(idx)?;
+            output = idx.get_object(list)?;
         }
+
+        if let Some(field) = &self.field {
+            output = field.get_value(program, output)?;
+        }
+
+        Ok(output)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum VariableAccessError {
+    NotAStruct,
+    NotARef,
+    NotAList,
+    InvalidIdx,
+    MissingVariable(VarNameId),
+    MissingField(VarNameId),
+}
+
+impl std::fmt::Display for VariableAccessError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
     }
 }
 
@@ -399,12 +489,35 @@ pub enum ListIdx<'a> {
     String(&'a str),
 }
 
+impl<'a> ListIdx<'a> {
+    pub fn get_object<'b>(&self, list: &'b [Object]) -> Result<&'b Object, VariableAccessError> {
+        match self {
+            ListIdx::Integer(idx) => match list.get(*idx) {
+                Some(object) => Ok(object),
+                None => Err(VariableAccessError::InvalidIdx),
+            },
+            ListIdx::String(str) => {
+                for value in list.iter() {
+                    let base = match value {
+                        Object::Struct(value) => &value.base,
+                        _ => continue,
+                    };
+
+                    if base == str {
+                        return Ok(value);
+                    }
+                }
+
+                Err(VariableAccessError::InvalidIdx)
+            }
+        }
+    }
+}
+
 pub struct ProgramState {
     pub scopes: Vec<Scope>,
 
     scope_cache: Vec<Scope>,
-    list_cache: Vec<Vec<Object>>,
-    obj_cache: Vec<Object>,
 }
 
 impl ProgramState {
@@ -412,8 +525,6 @@ impl ProgramState {
         Self {
             scopes: vec![],
             scope_cache: vec![],
-            list_cache: vec![],
-            obj_cache: vec![],
         }
     }
 
@@ -426,116 +537,126 @@ impl ProgramState {
         let scope = &self.scopes[value.scope];
         let mut variable = scope.0.get(&value.target)?;
 
-        while let Variable::Ref(value) = variable {
+        if let Object::List(list) = variable {
+            variable = list.get(value.offset)?;
+        }
+
+        while let Object::Ref(value) = variable {
             let scope = &self.scopes[value.scope];
             variable = scope.0.get(&value.target)?;
 
-            if let Variable::List(list) = variable {
-                return list.get(value.offset);
+            if let Object::List(list) = variable {
+                variable = list.get(value.offset)?;
             }
         }
 
-        match variable {
-            Variable::Object(value) => Some(value),
-            Variable::List(list) => list.first(),
-            _ => unreachable!(),
-        }
+        Some(variable)
     }
 
-    pub fn get_object(&self, id: VarNameId, idx: Option<ListIdx>) -> Option<VariableDeref> {
-        let (_, mut variable) = self.get_value(id)?;
+    // pub fn get_object(&self, id: VarNameId, idx: Option<ListIdx>) -> Option<VariableDeref> {
+    //     let (_, mut variable) = self.get_value(id)?;
 
-        if let Variable::Counter(counter) = variable {
-            return Some(VariableDeref::Counter(counter));
-        }
+    //     if let Variable::Counter(counter) = variable {
+    //         return Some(VariableDeref::Counter(counter));
+    //     }
 
-        while let Variable::Ref(value) = variable {
-            if idx.is_some() {
-                panic!("Tried to index into a reference");
+    //     while let Variable::Ref(value) = variable {
+    //         if idx.is_some() {
+    //             panic!("Tried to index into a reference");
+    //         }
+
+    //         let scope = &self.scopes[value.scope];
+    //         variable = scope.0.get(&value.target)?;
+
+    //         if let Variable::List(list) = variable {
+    //             return Some(VariableDeref::Object(list.get(value.offset)?));
+    //         }
+    //     }
+
+    //     match variable {
+    //         Variable::Object(value) => {
+    //             if idx.is_some() {
+    //                 panic!("Tried to index into an object");
+    //             }
+    //             Some(VariableDeref::Object(value))
+    //         }
+    //         Variable::List(list) => {
+    //             let idx = idx.unwrap_or(ListIdx::Integer(0));
+
+    //             match idx {
+    //                 ListIdx::Integer(idx) => Some(VariableDeref::Object(list.get(idx)?)),
+    //                 ListIdx::String(lookup) => {
+    //                     let value = list.iter().find(|value| value.base == lookup)?;
+    //                     Some(VariableDeref::Object(value))
+    //                 }
+    //             }
+    //         }
+    //         _ => unreachable!(),
+    //     }
+    // }
+
+    pub fn object_to_idx<'a>(&'a self, object: &'a Object) -> Option<ListIdx<'a>> {
+        match object {
+            Object::Counter(counter) => {
+                let idx = counter.idx();
+
+                if idx < 0 {
+                    return None;
+                };
+
+                Some(ListIdx::Integer(idx as usize))
             }
+            Object::Ref(variable_ref) => {
+                let Some(object) = self.evaluate_ref(*variable_ref) else {
+                    return None;
+                };
 
-            let scope = &self.scopes[value.scope];
-            variable = scope.0.get(&value.target)?;
-
-            if let Variable::List(list) = variable {
-                return Some(VariableDeref::Object(list.get(value.offset)?));
+                self.object_to_idx(object)
             }
-        }
-
-        match variable {
-            Variable::Object(value) => {
-                if idx.is_some() {
-                    panic!("Tried to index into an object");
-                }
-                Some(VariableDeref::Object(value))
-            }
-            Variable::List(list) => {
-                let idx = idx.unwrap_or(ListIdx::Integer(0));
-
-                match idx {
-                    ListIdx::Integer(idx) => Some(VariableDeref::Object(list.get(idx)?)),
-                    ListIdx::String(lookup) => {
-                        let value = list.iter().find(|value| value.base == lookup)?;
-                        Some(VariableDeref::Object(value))
-                    }
-                }
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn get_field(&self, id: &VarFieldId) -> Option<VariableField> {
-        let idx = match &id.idx {
-            Some(value) => match value.as_ref() {
-                VariableIdx::Integer(idx) => Some(ListIdx::Integer(*idx)),
-                VariableIdx::Variable(id) => match self.get_field(id)? {
-                    VariableField::String(value) => match value.parse() {
-                        Ok(idx) => Some(ListIdx::Integer(idx)),
-                        _ => Some(ListIdx::String(value)),
-                        // Err(_) => panic!("List cannot be indexed by {value}",),
-                    },
-                    VariableField::Idx(idx) if idx >= 0 => Some(ListIdx::Integer(idx as usize)),
-                    VariableField::Idx(idx) => {
-                        panic!("List cannot be indexed by {idx}");
-                    }
-                },
+            Object::Struct(value) => match value.base.parse() {
+                Ok(idx) => Some(ListIdx::Integer(idx)),
+                Err(_) => Some(ListIdx::String(&value.base)),
             },
-            None => None,
-        };
-
-        let object = self.get_object(id.var, idx)?;
-
-        match (id.field, object) {
-            (None, VariableDeref::Counter(counter)) => Some(VariableField::Idx(counter.idx())),
-            (None, VariableDeref::Object(object)) => Some(VariableField::String(&object.base)),
-            (Some(field), VariableDeref::Object(object)) => object
-                .properties
-                .get(&field)
-                .map(|value| VariableField::String(value.as_str())),
-            (Some(_), VariableDeref::Counter(_)) => None,
+            Object::List(_) => None,
         }
     }
 
-    pub fn get_var<'a>(&'a self, id: VarNameId) -> impl Iterator<Item = &'a Object> {
-        let (_, mut variable) = match self.get_value(id) {
-            Some(value) => value,
-            None => return VarIter::None,
+    pub fn evaluate_idx<'a>(
+        &'a self,
+        idx: &VariableIdx,
+    ) -> Result<ListIdx<'a>, VariableAccessError> {
+        let id = match idx {
+            VariableIdx::Integer(idx) => return Ok(ListIdx::Integer(*idx)),
+            VariableIdx::Variable(id) => id,
         };
 
-        while let Variable::Ref(value) = variable {
-            let scope = &self.scopes[value.scope];
-            variable = match scope.0.get(&value.target) {
-                Some(value) => value,
-                None => return VarIter::None,
+        let object = self.get_object(id)?;
+        let Some(idx) = self.object_to_idx(object) else {
+            return Err(VariableAccessError::InvalidIdx);
+        };
+
+        Ok(idx)
+    }
+
+    pub fn get_object<'a>(&'a self, id: &VarFieldId) -> Result<&'a Object, VariableAccessError> {
+        let Some((_scope_idx, mut object)) = self.get_value(id.var) else {
+            return Err(VariableAccessError::MissingVariable(id.var));
+        };
+
+        if let Some(idx) = &id.idx {
+            let Object::List(list) = object else {
+                return Err(VariableAccessError::NotAList);
             };
+
+            let idx = self.evaluate_idx(idx)?;
+            object = idx.get_object(list)?;
         }
 
-        match variable {
-            Variable::Object(object) => VarIter::Single(object),
-            Variable::List(list) => VarIter::List(list.iter()),
-            Variable::Counter(_) => return VarIter::None,
-            Variable::Ref(_) => unreachable!(),
+        if let Some(field) = &id.field {
+            object = field.get_value(self, object)?;
         }
+
+        Ok(object)
     }
 
     pub fn pop_scope(&mut self) {
@@ -544,26 +665,11 @@ impl ProgramState {
             None => return,
         };
 
-        for (_, variable) in scope.0.drain() {
-            match variable {
-                Variable::Object(obj) => self.obj_cache.push(obj),
-                Variable::List(mut objs) => {
-                    self.obj_cache.extend(objs.drain(..));
-                    self.list_cache.push(objs);
-                }
-                _ => {}
-            }
-        }
-
+        scope.0.clear();
         self.scope_cache.push(scope);
     }
 
-    pub fn insert_var(
-        &mut self,
-        id: VarNameId,
-        var: Variable,
-        scope: Option<usize>,
-    ) -> &mut Variable {
+    pub fn insert_var(&mut self, id: VarNameId, var: Object, scope: Option<usize>) -> &mut Object {
         if self.scopes.is_empty() {
             self.new_scope();
         }
@@ -578,71 +684,38 @@ impl ProgramState {
         scope.0.get_mut(&id).unwrap()
     }
 
-    pub fn set_var(&mut self, id: VarNameId, property: Option<VarNameId>, value: String) {
-        if self.scopes.is_empty() {
-            self.new_scope();
-        }
-
-        let scope = self.scopes.last_mut().unwrap();
-
-        let var = scope.0.entry(id).or_insert_with(|| {
-            Variable::Object(Object {
-                base: "".into(),
-                properties: Default::default(),
-            })
-        });
-
-        let object = match var {
-            Variable::Object(object) => object,
-            _ => panic!("Tried to set value of non-object"),
-        };
-
-        match property {
-            Some(property) => {
-                object.properties.insert(property, value);
-            }
-            None => {
-                object.base = value;
-            }
-        }
-    }
-
-    pub fn new_list(&mut self, id: VarNameId, scope: Option<usize>) -> &mut Vec<Object> {
-        let list = self.list_cache.pop().unwrap_or(vec![]);
-        let var = Variable::List(list);
-
-        self.insert_var(id, var, scope).as_list()
-    }
-
-    #[allow(dead_code)]
-    pub fn new_obj(&mut self, id: VarNameId, scope: Option<usize>) -> &mut Object {
-        let obj = self.obj_cache.pop().unwrap_or(Object {
-            base: String::new(),
-            properties: HashMap::new(),
-        });
-        let var = Variable::Object(obj);
-
-        self.insert_var(id, var, scope).as_obj()
-    }
-
-    pub fn new_ref(
+    pub fn set_var(
         &mut self,
         id: VarNameId,
-        target: VarNameId,
-        offset: usize,
-        target_scope: usize,
-        scope: Option<usize>,
-    ) -> &mut VariableRef {
-        let var = Variable::Ref(VariableRef {
-            scope: target_scope,
-            target,
-            offset,
-        });
+        property: Option<VarNameId>,
+        value: Object,
+    ) -> Result<(), VariableAccessError> {
+        match property {
+            Some(property_id) => match self.get_value_mut(id) {
+                Some(Object::Struct(into)) => {
+                    into.properties.insert(property_id, value);
+                }
+                Some(_) => return Err(VariableAccessError::NotAStruct),
+                None => return Err(VariableAccessError::MissingVariable(id)),
+            },
+            None => match self.get_value_mut(id) {
+                Some(variable) => {
+                    *variable = value;
+                }
+                None => {
+                    if self.scopes.is_empty() {
+                        self.new_scope();
+                    }
+                    let scope = self.scopes.last_mut().unwrap();
+                    scope.0.insert(id, value);
+                }
+            },
+        }
 
-        self.insert_var(id, var, scope).as_ref()
+        Ok(())
     }
 
-    pub fn get_value(&self, variable: VarNameId) -> Option<(usize, &Variable)> {
+    pub fn get_value(&self, variable: VarNameId) -> Option<(usize, &Object)> {
         for (i, scope) in self.scopes.iter().enumerate().rev() {
             if let Some(value) = scope.0.get(&variable) {
                 return Some((i, value));
@@ -652,7 +725,7 @@ impl ProgramState {
         None
     }
 
-    pub fn get_value_mut(&mut self, variable: VarNameId) -> Option<&mut Variable> {
+    pub fn get_value_mut(&mut self, variable: VarNameId) -> Option<&mut Object> {
         for scope in self.scopes.iter_mut().rev() {
             if let Some(value) = scope.0.get_mut(&variable) {
                 return Some(value);
@@ -668,46 +741,17 @@ pub trait Executable<Command> {
 
     fn finish(&mut self, state: &mut ProgramState, shutdown: &Shutdown);
 
-    fn execute(&mut self, command: &Command, state: &mut ProgramState, shutdown: &Shutdown);
+    fn execute(
+        &mut self,
+        command: &Command,
+        state: &mut ProgramState,
+        shutdown: &Shutdown,
+    ) -> Result<(), VariableAccessError>;
 
-    fn set_iter(&mut self, iter_var: VarNameId, idx: usize, variable: &Variable) {
+    fn set_iter(&mut self, iter_var: VarNameId, idx: usize, variable: &Object) {
         let _iter_var = iter_var;
         let _idx = idx;
         let _variable = variable;
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum RangeExpr {
-    Integer(i64),
-    Variable(StringExpr),
-}
-
-impl RangeExpr {
-    pub fn evaluate(&self, state: &ProgramState) -> i64 {
-        match self {
-            RangeExpr::Integer(value) => *value,
-            RangeExpr::Variable(value) => {
-                let expr = value.evaluate(state);
-                expr.parse()
-                    .expect("Failed to convert range expression to int")
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum IterTargetExpr {
-    Variable(VarNameId),
-    Range { start: RangeExpr, end: RangeExpr },
-}
-
-impl IterTargetExpr {
-    pub fn to_itertarget(&self) -> IterTarget {
-        match self {
-            IterTargetExpr::Variable(id) => IterTarget::Variable(*id),
-            IterTargetExpr::Range { .. } => IterTarget::Range,
-        }
     }
 }
 
@@ -728,12 +772,12 @@ pub enum Instruction<T> {
     CreateVar {
         target: VarNameId,
         scope: Option<usize>,
-        value: VariableExpr,
+        value: ObjectExpr,
     },
     AssignVar {
         target: VarNameId,
         scope: Option<usize>,
-        value: VariableExpr,
+        value: ObjectExpr,
     },
     StartIter {
         /// Id of the variable to iterate over
@@ -774,13 +818,13 @@ impl<Command> Program<Command> {
         executable: &mut impl Executable<Command>,
         state: &mut ProgramState,
         shutdown: &Shutdown,
-    ) {
+    ) -> Result<(), (usize, VariableAccessError)> {
         let mut counter = 0;
 
         while counter < self.0.len() {
             if shutdown.is_shutdown() {
                 executable.shutdown();
-                return;
+                return Ok(());
             }
 
             let instruction = &self.0[counter];
@@ -793,21 +837,15 @@ impl<Command> Program<Command> {
                     state.pop_scope();
                 }
                 Instruction::PushList { target, object } => {
-                    let object = object.evaluate(state);
-                    match state.get_value_mut(*target) {
-                        Some(Variable::Ref(_)) => panic!("Tried to push to reference variable"),
-                        Some(variable) => {
-                            if !variable.is_list() {
-                                let mut new_var = Variable::List(vec![]);
-                                std::mem::swap(variable, &mut new_var);
-                                let object = new_var.take_obj();
-                                variable.as_list().push(object);
-                            }
+                    let object = object.evaluate(state).map_err(|e| (counter, e))?;
 
-                            variable.as_list().push(object);
+                    match state.get_value_mut(*target) {
+                        Some(Object::List(list)) => {
+                            list.push(object);
                         }
+                        Some(_) => return Err((counter, VariableAccessError::NotAList)),
                         None => {
-                            state.insert_var(*target, Variable::Object(object), None);
+                            return Err((counter, VariableAccessError::MissingVariable(*target)))
                         }
                     }
                 }
@@ -816,7 +854,7 @@ impl<Command> Program<Command> {
                     scope,
                     value,
                 } => {
-                    let eval = value.evaluate(state);
+                    let eval = value.evaluate(state).map_err(|e| (counter, e))?;
                     match scope {
                         Some(scope) => {
                             if let Some(scope) = state.scopes.get_mut(*scope) {
@@ -833,7 +871,7 @@ impl<Command> Program<Command> {
                     scope,
                     value,
                 } => {
-                    let eval = value.evaluate(state);
+                    let eval = value.evaluate(state).map_err(|e| (counter, e))?;
                     match scope {
                         Some(scope) => {
                             if let Some(scope) = state.scopes.get_mut(*scope) {
@@ -853,35 +891,54 @@ impl<Command> Program<Command> {
                     target: IterTargetExpr::Variable(target),
                     iter,
                     jump,
-                } => match state.get_value(*target) {
-                    Some((scope, value)) if value.len().is_some() && value.len().unwrap() > 0 => {
-                        executable.set_iter(*iter, 0, value);
-                        state.new_ref(*iter, *target, 0, scope, None);
-                    }
-                    _ => {
+                } => {
+                    let (scope, object) = state
+                        .get_value(*target)
+                        .ok_or((counter, VariableAccessError::MissingVariable(*target)))?;
+
+                    let len = match object {
+                        Object::List(vec) => vec.len(),
+                        Object::Counter(counter) => counter.len(),
+                        _ => return Err((counter, VariableAccessError::NotAList)),
+                    };
+
+                    if len > 0 {
+                        executable.set_iter(*iter, 0, object);
+                        state.insert_var(
+                            *iter,
+                            Object::Ref(VariableRef {
+                                scope,
+                                target: *target,
+                                offset: 0,
+                            }),
+                            None,
+                        );
+                    } else {
                         counter = **jump;
                         continue;
-                    }
-                },
+                    };
+                }
                 Instruction::Increment {
                     target: IterTarget::Variable(target),
                     iter,
                     jump,
                 } => {
-                    let len = match state.get_value(*target).map(|(_, value)| value) {
-                        Some(variable) if variable.len().is_some() => variable.len().unwrap(),
-                        _ => {
-                            counter = **jump;
-                            continue;
-                        }
+                    let (_scope, object) = state
+                        .get_value(*target)
+                        .ok_or((counter, VariableAccessError::MissingVariable(*target)))?;
+
+                    let len = match object {
+                        Object::List(vec) => vec.len(),
+                        Object::Counter(counter) => counter.len(),
+                        _ => return Err((counter, VariableAccessError::NotAList)),
                     };
 
-                    let iter_var = match state.get_value_mut(*iter) {
-                        Some(value) if value.is_ref() => value.as_ref(),
-                        _ => {
-                            counter = **jump;
-                            continue;
-                        }
+                    let iter_var = state
+                        .get_value_mut(*iter)
+                        .ok_or((counter, VariableAccessError::MissingVariable(*iter)))?;
+
+                    let Object::Ref(iter_var) = iter_var else {
+                        return Err((counter, VariableAccessError::NotARef));
                     };
 
                     iter_var.offset += 1;
@@ -899,15 +956,15 @@ impl<Command> Program<Command> {
                     iter,
                     jump,
                 } => {
-                    let start = start.evaluate(state);
-                    let end = end.evaluate(state);
+                    let start = start.evaluate(state).map_err(|e| (counter, e))?;
+                    let end = end.evaluate(state).map_err(|e| (counter, e))?;
 
                     if start >= end {
                         counter = **jump;
                         continue;
                     }
 
-                    let var = Variable::Counter(Counter {
+                    let var = Object::Counter(Counter {
                         offset: 0,
                         start,
                         end,
@@ -920,19 +977,18 @@ impl<Command> Program<Command> {
                     iter,
                     jump,
                 } => {
-                    let iter_var = match state.get_value_mut(*iter) {
-                        Some(value) if value.is_counter() => value,
-                        _ => {
-                            counter = **jump;
-                            continue;
-                        }
+                    let iter_var = state
+                        .get_value_mut(*iter)
+                        .ok_or((counter, VariableAccessError::MissingVariable(*iter)))?;
+
+                    let Object::Counter(range_counter) = iter_var else {
+                        return Err((counter, VariableAccessError::NotARef));
                     };
 
-                    let value = iter_var.as_counter();
-                    value.offset += 1;
-                    let idx = value.start + value.offset as i64;
-                    let end = value.end;
-                    let offset = value.offset;
+                    range_counter.offset += 1;
+                    let idx = range_counter.start + range_counter.offset as i64;
+                    let end = range_counter.end;
+                    let offset = range_counter.offset;
                     executable.set_iter(*iter, offset, iter_var);
 
                     if idx >= end {
@@ -941,18 +997,20 @@ impl<Command> Program<Command> {
                     }
                 }
                 Instruction::ConditionalJump { cond, jump } => {
-                    let variable = state.get_field(cond);
-                    let mut pass = true;
+                    let object = state.get_object(cond).map_err(|e| (counter, e))?;
 
-                    if let Some(value) = variable {
-                        pass = match value {
-                            VariableField::String(value) if value != "false" => false,
-                            VariableField::Idx(value) if value != 0 => false,
-                            _ => true,
-                        };
-                    }
+                    let value = match object {
+                        Object::Struct(object) => object,
+                        Object::Ref(variable_ref) => {
+                            match state.evaluate_ref(*variable_ref).unwrap() {
+                                Object::Struct(object) => object,
+                                _ => return Err((counter, VariableAccessError::NotAStruct)),
+                            }
+                        }
+                        _ => return Err((counter, VariableAccessError::NotAStruct)),
+                    };
 
-                    if pass {
+                    if value.base != "false" {
                         counter = **jump;
                         continue;
                     }
@@ -962,7 +1020,9 @@ impl<Command> Program<Command> {
                     continue;
                 }
                 Instruction::Command(command) => {
-                    executable.execute(command, state, shutdown);
+                    if let Err(e) = executable.execute(command, state, shutdown) {
+                        return Err((counter, e));
+                    }
                 }
             }
 
@@ -970,5 +1030,6 @@ impl<Command> Program<Command> {
         }
 
         executable.finish(state, shutdown);
+        Ok(())
     }
 }

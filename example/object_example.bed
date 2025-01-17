@@ -1,0 +1,24 @@
+[includes]
+"example/templates"
+
+[output]
+"example/builds"
+
+[globals]
+nested = [
+    ("Test1", a=("a", b=1), b=[1, (2, a=2)]),
+    ("Test2", a=("c", b=3), b=[5, 6, 7, 8]),
+];
+
+
+[commands]
+for obj in nested {
+    spawn ./ + [obj.a];
+
+    iter = *obj.b;
+
+    for name in iter {
+        spawn ./ + [name];
+
+    }
+}

@@ -228,11 +228,6 @@ impl ProcessInfo {
         }
     }
 
-    pub fn add_args(&mut self, args: impl IntoIterator<Item = String>) -> &mut Self {
-        self.args.extend(args.into_iter());
-        self
-    }
-
     pub fn set_stdout(&mut self, out: OutputMap<PathBuf>) -> &mut Self {
         self.stdout = out;
         self

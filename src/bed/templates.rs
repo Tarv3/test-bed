@@ -2,9 +2,11 @@ use std::{collections::HashMap, fmt::Display, io::ErrorKind, path::PathBuf};
 
 use minijinja::{Environment, Source};
 
-use crate::program::{Object, ProgramState, VarNameId, VarNames, Variable, VariableSerialize};
+use crate::program::{
+    Object, ObjectSerialize, ProgramState, Struct, VarNameId, VarNames, VariableAccessError,
+};
 
-use super::expr::StringExpr;
+use super::expr::{ObjectExpr, StringExpr};
 
 #[derive(Debug)]
 pub enum TemplateErrorType {
@@ -13,29 +15,45 @@ pub enum TemplateErrorType {
     RenderError(minijinja::Error),
 }
 
-pub struct TemplateBuildError {
-    pub template_path: String,
-    pub output_path: String,
-    pub error: TemplateErrorType,
+pub enum TemplateBuildError {
+    VariableError(VariableAccessError),
+    BuildError {
+        template_path: String,
+        output_path: String,
+        error: TemplateErrorType,
+    },
+}
+
+impl From<VariableAccessError> for TemplateBuildError {
+    fn from(value: VariableAccessError) -> Self {
+        Self::VariableError(value)
+    }
 }
 
 impl Display for TemplateBuildError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Template `{}` -> `{}` ",
-            self.template_path, self.output_path
-        )?;
+        match self {
+            TemplateBuildError::VariableError(variable_access_error) => {
+                write!(f, "{variable_access_error}")
+            }
+            TemplateBuildError::BuildError {
+                template_path,
+                output_path,
+                error,
+            } => {
+                write!(f, "Template `{}` -> `{}` ", template_path, output_path)?;
 
-        match &self.error {
-            TemplateErrorType::InvalidPath(path) => {
-                write!(f, "path `{path:?}` could not be converted to string")
-            }
-            TemplateErrorType::WriteError(e) => {
-                write!(f, "failed to save render: {e}")
-            }
-            TemplateErrorType::RenderError(e) => {
-                write!(f, "failed to render template: {e}")
+                match &error {
+                    TemplateErrorType::InvalidPath(path) => {
+                        write!(f, "path `{path:?}` could not be converted to string")
+                    }
+                    TemplateErrorType::WriteError(e) => {
+                        write!(f, "failed to save render: {e}")
+                    }
+                    TemplateErrorType::RenderError(e) => {
+                        write!(f, "failed to render template: {e}")
+                    }
+                }
             }
         }
     }
@@ -86,7 +104,7 @@ impl<'source> TemplateBuilder<'source> {
             }
         };
 
-        let mut current_params: HashMap<&str, VariableSerialize> = Default::default();
+        let mut current_params: HashMap<&str, ObjectSerialize> = Default::default();
         // self.current_params.clear();
 
         for scope in state.scopes.iter().rev() {
@@ -111,7 +129,7 @@ impl<'source> TemplateBuilder<'source> {
         let output_path = match output_file.to_str() {
             Some(file) => file.to_string(),
             None => {
-                return Err(TemplateBuildError {
+                return Err(TemplateBuildError::BuildError {
                     template_path,
                     output_path: output_file.to_string_lossy().to_string(),
                     error: TemplateErrorType::InvalidPath(output_file),
@@ -122,7 +140,7 @@ impl<'source> TemplateBuilder<'source> {
         let rendered = match template.render(&current_params) {
             Ok(rendered) => rendered,
             Err(e) => {
-                return Err(TemplateBuildError {
+                return Err(TemplateBuildError::BuildError {
                     template_path,
                     output_path,
                     error: TemplateErrorType::RenderError(e),
@@ -135,7 +153,7 @@ impl<'source> TemplateBuilder<'source> {
                 Ok(_) => {}
                 Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
                 Err(e) => {
-                    return Err(TemplateBuildError {
+                    return Err(TemplateBuildError::BuildError {
                         template_path,
                         output_path,
                         error: TemplateErrorType::WriteError(e),
@@ -145,7 +163,7 @@ impl<'source> TemplateBuilder<'source> {
         }
 
         if let Err(e) = std::fs::write(&output_file, rendered) {
-            return Err(TemplateBuildError {
+            return Err(TemplateBuildError::BuildError {
                 template_path,
                 output_path,
                 error: TemplateErrorType::WriteError(e),
@@ -157,18 +175,22 @@ impl<'source> TemplateBuilder<'source> {
 }
 
 pub fn yield_value(output: VarNameId, to_yield: Object, state: &mut ProgramState) {
-    let output_var = match state.scopes[0].0.get_mut(&output) {
-        Some(Variable::List(list)) => list,
-        _ => state.new_list(output, Some(0)),
+    match state.scopes[0].0.get_mut(&output) {
+        Some(Object::List(list)) => {
+            list.push(to_yield);
+        }
+        _ => {
+            state.scopes[0]
+                .0
+                .insert(output, Object::List(vec![to_yield]));
+        }
     };
-
-    output_var.push(to_yield)
 }
 
 #[derive(Clone, Debug)]
-pub enum BuildStringExpr {
-    Build(StringExpr, StringExpr),
-    String(StringExpr),
+pub struct BuildStringExpr {
+    pub template: StringExpr,
+    pub output: StringExpr,
 }
 
 impl BuildStringExpr {
@@ -178,21 +200,16 @@ impl BuildStringExpr {
         builder: &mut TemplateBuilder<'a>,
         names: &VarNames,
     ) -> Result<String, TemplateBuildError> {
-        match self {
-            BuildStringExpr::Build(template, name) => {
-                let template = template.evaluate(state);
-                let output_name = name.evaluate(state);
-                builder.build(template, output_name, state, names)
-            }
-            BuildStringExpr::String(string) => Ok(string.evaluate(state)),
-        }
+        let template = self.template.evaluate(state)?;
+        let output_name = self.output.evaluate(state)?;
+        builder.build(template, output_name, state, names)
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct BuildObjectExpr {
     pub base: BuildStringExpr,
-    pub properties: HashMap<VarNameId, StringExpr>,
+    pub properties: HashMap<VarNameId, ObjectExpr>,
 }
 
 impl BuildObjectExpr {
@@ -210,14 +227,36 @@ impl BuildObjectExpr {
         names: &VarNames,
     ) -> Result<Object, TemplateBuildError> {
         let base = self.base.evaluate(state, builder, names)?;
+        let mut properties = HashMap::default();
 
-        let mut object = Object::new(base);
         for (key, value) in self.properties.iter() {
-            let value = value.evaluate(state);
-            object.properties.insert(*key, value);
+            let value = value.evaluate(state)?;
+            properties.insert(*key, value);
         }
 
-        Ok(object)
+        Ok(Object::Struct(Struct { base, properties }))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum YieldExpr {
+    Build(BuildObjectExpr),
+    Object(ObjectExpr),
+}
+
+impl YieldExpr {
+    pub fn evaluate<'a>(
+        &self,
+        state: &mut ProgramState,
+        builder: &mut TemplateBuilder<'a>,
+        names: &VarNames,
+    ) -> Result<Object, TemplateBuildError> {
+        match self {
+            YieldExpr::Build(build_object_expr) => {
+                build_object_expr.evaluate(state, builder, names)
+            }
+            YieldExpr::Object(object_expr) => Ok(object_expr.evaluate(state)?),
+        }
     }
 }
 
@@ -229,6 +268,6 @@ pub enum TemplateCommand {
     },
     Yield {
         output: VarNameId,
-        object: BuildObjectExpr,
+        object: YieldExpr,
     },
 }

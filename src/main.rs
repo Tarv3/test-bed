@@ -71,7 +71,7 @@ fn main() {
             }
         };
 
-        params.insert(id, value.to_string());
+        params.insert(id, program::Object::new(value.to_string()));
     }
 
     let command_programs = match commands.is_empty() && !run_all {
@@ -120,10 +120,10 @@ fn main() {
         state.new_scope();
 
         for ((id, property), value) in params.iter() {
-            state.set_var(*id, *property, value.clone());
+            state.set_var(*id, *property, value.clone()).unwrap();
         }
 
-        globals_program.run(&mut test_bed, &mut state, &shutdown);
+        globals_program.run(&mut test_bed, &mut state, &shutdown).unwrap();
         for (name, program) in template_programs {
             test_bed
                 .multibar
@@ -134,7 +134,7 @@ fn main() {
                 println!("{program}");
             }
             state.new_scope();
-            program.run(&mut test_bed, &mut state, &shutdown);
+            program.run(&mut test_bed, &mut state, &shutdown).unwrap();
             state.pop_scope();
         }
 
@@ -155,7 +155,7 @@ fn main() {
             }
 
             state.new_scope();
-            program.run(&mut test_bed, &mut state, &shutdown);
+            program.run(&mut test_bed, &mut state, &shutdown).unwrap();
             state.pop_scope();
             test_bed.reset(&shutdown);
         }
