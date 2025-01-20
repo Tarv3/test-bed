@@ -233,6 +233,11 @@ impl<'source> Executable<Command> for TestBed<'source> {
             _ => {}
         }
     }
+
+    fn print(&self, program: &ProgramState, object: &Object) {
+        let display = object.to_display(program, &self.var_names);
+        self.multibar.println(&format!("{display}\n")).ok();
+    }
 }
 
 impl<'source> Executable<TemplateCommand> for TestBed<'source> {
@@ -272,5 +277,10 @@ impl<'source> Executable<TemplateCommand> for TestBed<'source> {
 
         println!("{err}\n");
         return Ok(());
+    }
+
+    fn print(&self, program: &ProgramState, object: &Object) {
+        let display = object.to_display(program, &self.var_names);
+        self.multibar.println(&format!("{display}\n")).ok();
     }
 }

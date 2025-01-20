@@ -106,6 +106,43 @@ impl Struct {
     pub fn new(base: String, properties: HashMap<VarNameId, Object>) -> Self {
         Self { base, properties }
     }
+
+    pub fn to_display<'a>(
+        &'a self,
+        state: &'a ProgramState,
+        names: &'a VarNames,
+    ) -> DisplayStruct<'a> {
+        DisplayStruct {
+            object: self,
+            program: state,
+            names,
+        }
+    }
+}
+
+pub struct DisplayStruct<'a> {
+    pub object: &'a Struct,
+    pub program: &'a ProgramState,
+    pub names: &'a VarNames,
+}
+
+impl<'a> std::fmt::Display for DisplayStruct<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.object.properties.is_empty() {
+            true => write!(f, "{}", self.object.base),
+            false => {
+                write!(f, "(")?;
+                write!(f, "{}", self.object.base)?;
+                for (name, object) in self.object.properties.iter() {
+                    let name = self.names.evaluate(*name).unwrap();
+                    let value = object.to_display(self.program, self.names);
+
+                    write!(f, ", {name}={value}")?;
+                }
+                write!(f, ")")
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -116,12 +153,86 @@ pub enum Object {
     List(Vec<Object>),
 }
 
+pub struct DisplayObject<'a> {
+    pub object: &'a Object,
+    pub program: &'a ProgramState,
+    pub names: &'a VarNames,
+}
+
+impl<'a> std::fmt::Display for DisplayObject<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.object {
+            Object::Counter(counter) => {
+                write!(
+                    f,
+                    "Counter({}..{}): {}",
+                    counter.start,
+                    counter.end,
+                    counter.idx()
+                )
+            }
+            Object::Ref(variable_ref) => {
+                let name = self.names.evaluate(variable_ref.target).unwrap();
+                let object = &self.program.scopes[variable_ref.scope]
+                    .0
+                    .get(&variable_ref.target)
+                    .unwrap();
+
+                match object {
+                    Object::List(vec) => {
+                        write!(f, "&{}[{}]: ", name, variable_ref.offset)?;
+                        write!(
+                            f,
+                            "{}",
+                            vec[variable_ref.offset].to_display(self.program, self.names)
+                        )
+                    }
+                    _ => {
+                        write!(f, "&{}: ", name)?;
+                        write!(f, "{}", object.to_display(self.program, self.names))
+                    }
+                }
+            }
+            Object::Struct(value) => {
+                let to_display = value.to_display(self.program, self.names);
+                write!(f, "{to_display}")
+            }
+            Object::List(vec) => {
+                write!(f, "[")?;
+                let mut iter = vec.iter();
+                if let Some(value) = iter.next() {
+                    let value = value.to_display(self.program, self.names);
+                    write!(f, "{value}")?;
+                }
+
+                for value in iter {
+                    let value = value.to_display(self.program, self.names);
+                    write!(f, ", {value}")?;
+                }
+                write!(f, "]")
+            }
+        }
+    }
+}
+
 impl Object {
     pub fn new(base: String) -> Self {
         Self::Struct(Struct {
             base,
             properties: HashMap::new(),
         })
+    }
+
+    pub fn to_display<'a>(
+        &'a self,
+        state: &'a ProgramState,
+        names: &'a VarNames,
+    ) -> DisplayObject<'a> {
+        DisplayObject {
+            object: self,
+            program: state,
+            names,
+        }
     }
 
     pub fn write_to_string<'a>(
@@ -140,7 +251,7 @@ impl Object {
             Object::Counter(counter) => {
                 write!(into, "{}", counter.idx()).unwrap();
             }
-            Object::List(_) => return Err(VariableAccessError::NotAStruct),
+            Object::List(_) => return Err(VariableAccessError::NotAStruct(self.clone())),
         }
 
         Ok(())
@@ -242,17 +353,6 @@ impl<'a> Serialize for PropertiesSerialize<'a> {
     }
 }
 
-// pub enum VariableDeref<'a> {
-//     Object(&'a Object),
-//     Counter(&'a Counter),
-// }
-
-// pub enum VariableField<'a> {
-//     // String(&'a str),
-//     Object(&'a Object),
-//     Idx(i64),
-// }
-
 #[derive(Clone, Copy, Debug)]
 pub struct VariableRef {
     pub scope: usize,
@@ -281,127 +381,6 @@ impl Counter {
         value as usize
     }
 }
-
-// #[derive(Clone, Debug)]
-// pub enum Variable {
-//     Counter(Counter),
-//     Ref(VariableRef),
-//     Object(Object),
-//     List(Vec<Object>),
-// }
-
-// impl Variable {
-//     pub fn is_ref(&self) -> bool {
-//         match self {
-//             Variable::Ref(_) => true,
-//             _ => false,
-//         }
-//     }
-
-//     pub fn is_counter(&self) -> bool {
-//         match self {
-//             Variable::Counter(_) => true,
-//             _ => false,
-//         }
-//     }
-
-//     pub fn len(&self) -> Option<usize> {
-//         match self {
-//             Variable::Counter(value) => Some(value.len()),
-//             Variable::Ref(_) => None,
-//             Variable::Object(_) => Some(1),
-//             Variable::List(list) => Some(list.len()),
-//         }
-//     }
-
-//     pub fn is_list(&self) -> bool {
-//         match self {
-//             Variable::List(_) => true,
-//             _ => false,
-//         }
-//     }
-
-//     pub fn take_obj(self) -> Object {
-//         match self {
-//             Variable::Object(value) => value,
-//             _ => panic!("Tried to get non-object value as Object"),
-//         }
-//     }
-
-//     #[allow(dead_code)]
-//     pub fn as_obj(&mut self) -> &mut Object {
-//         match self {
-//             Variable::Object(value) => value,
-//             _ => panic!("Tried to get non-object value as Object"),
-//         }
-//     }
-
-//     pub fn as_list(&mut self) -> &mut Vec<Object> {
-//         match self {
-//             Variable::List(value) => value,
-//             _ => panic!("Tried to get non-list value as List"),
-//         }
-//     }
-
-//     pub fn as_ref(&mut self) -> &mut VariableRef {
-//         match self {
-//             Variable::Ref(value) => value,
-//             _ => panic!("Tried to get non-ref value as VariableRef"),
-//         }
-//     }
-
-//     pub fn as_counter(&mut self) -> &mut Counter {
-//         match self {
-//             Variable::Counter(value) => value,
-//             _ => panic!("Tried to get non-ref value as VariableRef"),
-//         }
-//     }
-
-//     pub fn to_serialize<'a>(
-//         &'a self,
-//         state: &'a ProgramState,
-//         names: &'a VarNames,
-//     ) -> VariableSerialize<'a> {
-//         VariableSerialize {
-//             variable: self,
-//             state,
-//             names,
-//         }
-//     }
-// }
-
-// pub struct VariableSerialize<'a> {
-//     variable: &'a Variable,
-//     state: &'a ProgramState,
-//     names: &'a VarNames,
-// }
-
-// impl<'a> Serialize for VariableSerialize<'a> {
-//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-//     where
-//         S: serde::Serializer,
-//     {
-//         match self.variable {
-//             Variable::Counter(counter) => serializer.serialize_i64(counter.idx()),
-//             Variable::Ref(variable_ref) => {
-//                 let Some(object) = self.state.evaluate_ref(*variable_ref) else {
-//                     return Err(serde::ser::Error::custom("Missing referenced object"));
-//                 };
-
-//                 object.to_serialize(self.names).serialize(serializer)
-//             }
-//             Variable::Object(object) => object.to_serialize(self.names).serialize(serializer),
-//             Variable::List(vec) => {
-//                 let mut seq_serializer = serializer.serialize_seq(Some(vec.len()))?;
-//                 for value in vec.iter() {
-//                     seq_serializer.serialize_element(&value.to_serialize(self.names))?;
-//                 }
-
-//                 seq_serializer.end()
-//             }
-//         }
-//     }
-// }
 
 #[derive(Clone, Debug)]
 pub struct Scope(pub HashMap<VarNameId, Object>);
@@ -437,12 +416,12 @@ impl VarFieldId {
             Object::Struct(value) => &value.properties,
             Object::Ref(value) => match program.evaluate_ref(*value).unwrap() {
                 Object::Struct(value) => &value.properties,
-                _x => {
-                    return Err(VariableAccessError::NotAStruct);
+                x => {
+                    return Err(VariableAccessError::NotAStruct(x.clone()));
                 }
             },
-            _x => {
-                return Err(VariableAccessError::NotAStruct);
+            x => {
+                return Err(VariableAccessError::NotAStruct(x.clone()));
             }
         };
 
@@ -469,7 +448,7 @@ impl VarFieldId {
 
 #[derive(Clone, Debug)]
 pub enum VariableAccessError {
-    NotAStruct,
+    NotAStruct(Object),
     NotARef,
     NotAList,
     InvalidIdx,
@@ -552,48 +531,6 @@ impl ProgramState {
 
         Some(variable)
     }
-
-    // pub fn get_object(&self, id: VarNameId, idx: Option<ListIdx>) -> Option<VariableDeref> {
-    //     let (_, mut variable) = self.get_value(id)?;
-
-    //     if let Variable::Counter(counter) = variable {
-    //         return Some(VariableDeref::Counter(counter));
-    //     }
-
-    //     while let Variable::Ref(value) = variable {
-    //         if idx.is_some() {
-    //             panic!("Tried to index into a reference");
-    //         }
-
-    //         let scope = &self.scopes[value.scope];
-    //         variable = scope.0.get(&value.target)?;
-
-    //         if let Variable::List(list) = variable {
-    //             return Some(VariableDeref::Object(list.get(value.offset)?));
-    //         }
-    //     }
-
-    //     match variable {
-    //         Variable::Object(value) => {
-    //             if idx.is_some() {
-    //                 panic!("Tried to index into an object");
-    //             }
-    //             Some(VariableDeref::Object(value))
-    //         }
-    //         Variable::List(list) => {
-    //             let idx = idx.unwrap_or(ListIdx::Integer(0));
-
-    //             match idx {
-    //                 ListIdx::Integer(idx) => Some(VariableDeref::Object(list.get(idx)?)),
-    //                 ListIdx::String(lookup) => {
-    //                     let value = list.iter().find(|value| value.base == lookup)?;
-    //                     Some(VariableDeref::Object(value))
-    //                 }
-    //             }
-    //         }
-    //         _ => unreachable!(),
-    //     }
-    // }
 
     pub fn object_to_idx<'a>(&'a self, object: &'a Object) -> Option<ListIdx<'a>> {
         match object {
@@ -695,7 +632,7 @@ impl ProgramState {
                 Some(Object::Struct(into)) => {
                     into.properties.insert(property_id, value);
                 }
-                Some(_) => return Err(VariableAccessError::NotAStruct),
+                Some(x) => return Err(VariableAccessError::NotAStruct(x.clone())),
                 None => return Err(VariableAccessError::MissingVariable(id)),
             },
             None => match self.get_value_mut(id) {
@@ -753,6 +690,8 @@ pub trait Executable<Command> {
         let _idx = idx;
         let _variable = variable;
     }
+
+    fn print(&self, program: &ProgramState, object: &Object);
 }
 
 #[derive(Clone, Debug)]
@@ -765,6 +704,7 @@ pub enum IterTarget {
 pub enum Instruction<T> {
     PushScope,
     PopScope,
+    Print(VarFieldId),
     PushList {
         target: VarNameId,
         object: ObjectExpr,
@@ -835,6 +775,10 @@ impl<Command> Program<Command> {
                 }
                 Instruction::PopScope => {
                     state.pop_scope();
+                }
+                Instruction::Print(variable) => {
+                    let variable = state.get_object(variable).map_err(|e| (counter, e))?;
+                    executable.print(state, variable);
                 }
                 Instruction::PushList { target, object } => {
                     let object = object.evaluate(state).map_err(|e| (counter, e))?;
@@ -1004,10 +948,15 @@ impl<Command> Program<Command> {
                         Object::Ref(variable_ref) => {
                             match state.evaluate_ref(*variable_ref).unwrap() {
                                 Object::Struct(object) => object,
-                                _ => return Err((counter, VariableAccessError::NotAStruct)),
+                                x => {
+                                    return Err((
+                                        counter,
+                                        VariableAccessError::NotAStruct(x.clone()),
+                                    ))
+                                }
                             }
                         }
-                        _ => return Err((counter, VariableAccessError::NotAStruct)),
+                        x => return Err((counter, VariableAccessError::NotAStruct(x.clone()))),
                     };
 
                     if value.base != "false" {

@@ -379,6 +379,7 @@ pub fn parse_template(
             Instruction::Command(TemplateCommand::BuildAssign { output, object })
         }
         Rule::variable_assignment => parse_variable_assignment(variables, inner),
+        Rule::print_var => parse_print(variables, inner),
         Rule::push => {
             let (target, object) = parse_push(variables, inner);
             Instruction::PushList { target, object }
@@ -521,6 +522,7 @@ pub fn parse_command(variables: &mut VarNames, pair: Pair<Rule>) -> Instruction<
 
     match inner.as_rule() {
         Rule::variable_assignment => parse_variable_assignment(variables, inner),
+        Rule::print_var => parse_print(variables, inner),
         Rule::push => {
             let (target, object) = parse_push(variables, inner);
             Instruction::PushList { target, object }
@@ -908,6 +910,14 @@ pub fn parse_struct_expression(variables: &mut VarNames, pair: Pair<Rule>) -> St
     }
 
     StructExpr { base, properties }
+}
+
+pub fn parse_print<T>(variables: &mut VarNames, pair: Pair<Rule>) -> Instruction<T> {
+    let mut inner = pair.into_inner();
+    let base = inner.next().unwrap();
+    let id = parse_variable_access(variables, base);
+
+    Instruction::Print(id)
 }
 
 pub fn parse_variable_clone(variables: &mut VarNames, pair: Pair<Rule>) -> VarFieldId {

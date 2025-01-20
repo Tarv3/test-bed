@@ -64,6 +64,7 @@ template_if_statement = {
 }
 
 template = {
+    print_var | 
     build_assignment |
     variable_assignment |
     push | 
@@ -113,6 +114,7 @@ command_if_statement = {
 }
 
 command = {
+    print_var | 
     variable_assignment | 
     push | 
     limit_spawn | 
@@ -238,6 +240,10 @@ variable_assign = {
     ":="
 }
 
+print_var = {
+    "print" ~ "(" ~ variable_access ~ ")"
+}
+
 variable_access = {
     immediate_variable_access ~ ( "." ~ variable_access)?
 }
@@ -259,7 +265,7 @@ struct_expr = {
 }
 
 object = {
-    variable_clone | list_expression | struct_expr | range
+    variable_clone | range | struct_expr | list_expression
 }
 
 property_assignment = { 

@@ -13,11 +13,14 @@ nested = [
 
 [commands]
 for obj in nested {
-    spawn ./ + [obj.a];
+    spawn ./ + [obj];
 
+    print(obj);
     iter = *obj.b;
+    print(iter);
 
     for name in iter {
+        print(name);
         spawn ./ + [name];
 
     }
