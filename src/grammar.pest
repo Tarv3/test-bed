@@ -40,7 +40,15 @@ commands = {
 // ============ Globals ================
 
 globals_program = {
-    (variable_assignment ~ ";")*
+    (global_assignment ~ ";")*
+}
+
+global_assignment = {
+    (variable_load | variable_assignment)
+}
+
+variable_load = {
+    ident ~ "=" ~ "load" ~ "(" ~ string_builder ~ ")"
 }
 
 // ============ Globals ================

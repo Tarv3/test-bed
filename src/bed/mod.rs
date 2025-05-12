@@ -6,7 +6,9 @@ use std::{
 
 use indicatif::{MultiProgress, ProgressDrawTarget};
 
-use crate::program::{Executable, Object, ProgramState, VarNameId, VarNames, VariableAccessError};
+use crate::program::{
+    Executable, Object, ObjectDeserialize, ProgramState, VarNameId, VarNames, VariableAccessError,
+};
 
 use self::{
     commands::Command,
@@ -146,6 +148,10 @@ impl<'source> Executable<Command> for TestBed<'source> {
         }
     }
 
+    fn var_names_mut(&mut self) -> &mut VarNames {
+        &mut self.var_names
+    }
+
     fn finish(&mut self, _: &mut ProgramState, shutdown: &crate::program::Shutdown) {
         self.wait_all(None, 0, shutdown);
 
@@ -245,6 +251,10 @@ impl<'source> Executable<TemplateCommand> for TestBed<'source> {
 
     fn finish(&mut self, _: &mut ProgramState, _: &crate::program::Shutdown) {}
 
+    fn var_names_mut(&mut self) -> &mut VarNames {
+        &mut self.var_names
+    }
+
     fn execute(
         &mut self,
         command: &TemplateCommand,
@@ -262,7 +272,6 @@ impl<'source> Executable<TemplateCommand> for TestBed<'source> {
                     Err(e) => e,
                 }
             }
-
             TemplateCommand::Yield { output, object } => {
                 match object.evaluate(state, &mut self.templates, &self.var_names) {
                     Ok(object) => {

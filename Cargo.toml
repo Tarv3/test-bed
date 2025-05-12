@@ -12,9 +12,10 @@ pest_derive = "2.5"
 ctrlc = "3.2.2"
 indicatif = "0.17"
 # indicatif = { git = "https://github.com/console-rs/indicatif.git" }
-minijinja = { version = "0.23.0", features=["source"] } 
+minijinja = { version = "0.23.0", features = ["source"] }
 indexmap = "1.9"
 memchr = "2.5.0"
 signal-hook = "0.3"
 console = "*"
-serde = "1"
+serde = { version = "1", features = ["derive"] }
+ron = "0.10.1"

@@ -281,11 +281,32 @@ pub fn parse_globals_program<T>(variables: &mut VarNames, pair: Pair<Rule>) -> P
     let mut exprs = vec![];
 
     for value in inner {
-        let instruction = parse_variable_assignment(variables, value);
+        let instruction = parse_global_assignment(variables, value);
         exprs.push(instruction);
     }
 
     Program(exprs)
+}
+
+pub fn parse_global_assignment<T>(variables: &mut VarNames, pair: Pair<Rule>) -> Instruction<T> {
+    let inner = pair.into_inner().next().unwrap();
+
+    match inner.as_rule() {
+        Rule::variable_assignment => parse_variable_assignment(variables, inner),
+        Rule::variable_load => parse_variable_load(variables, inner),
+        _ => unreachable!(),
+    }
+}
+
+pub fn parse_variable_load<T>(variables: &mut VarNames, pair: Pair<Rule>) -> Instruction<T> {
+    let mut inner = pair.into_inner();
+    let ident = parse_ident(variables, inner.next().unwrap());
+    let str = parse_string_builder(variables, inner.next().unwrap());
+
+    Instruction::LoadVar {
+        target: ident,
+        path: str,
+    }
 }
 
 // ======================= Globals ===========================

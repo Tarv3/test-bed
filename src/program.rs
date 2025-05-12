@@ -7,11 +7,12 @@ use std::{
 
 use indexmap::IndexSet;
 use serde::{
+    de::Visitor,
     ser::{SerializeMap, SerializeSeq},
-    Serialize,
+    Deserialize, Serialize,
 };
 
-use crate::bed::expr::{IterTargetExpr, ObjectExpr};
+use crate::bed::expr::{IterTargetExpr, ObjectExpr, StringExpr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StackId(pub usize);
@@ -353,6 +354,193 @@ impl<'a> Serialize for PropertiesSerialize<'a> {
     }
 }
 
+#[derive(Clone)]
+pub enum ObjectDeserialize {
+    Struct {
+        base: String,
+        properties: HashMap<String, ObjectDeserialize>,
+    },
+    List(Vec<ObjectDeserialize>),
+}
+
+impl<'de> Deserialize<'de> for ObjectDeserialize {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(ObjectVisitor)
+    }
+}
+
+struct ObjectVisitor;
+
+impl<'de> Visitor<'de> for ObjectVisitor {
+    type Value = ObjectDeserialize;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(formatter, "(String | Struct | [Object]")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(ObjectDeserialize::Struct {
+            base: v.into(),
+            properties: Default::default(),
+        })
+    }
+
+    fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(ObjectDeserialize::Struct {
+            base: v,
+            properties: Default::default(),
+        })
+    }
+
+    fn visit_i8<E>(self, v: i8) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(ObjectDeserialize::Struct {
+            base: format!("{v}"),
+            properties: Default::default(),
+        })
+    }
+
+    fn visit_i16<E>(self, v: i16) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(ObjectDeserialize::Struct {
+            base: format!("{v}"),
+            properties: Default::default(),
+        })
+    }
+
+    fn visit_i32<E>(self, v: i32) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(ObjectDeserialize::Struct {
+            base: format!("{v}"),
+            properties: Default::default(),
+        })
+    }
+
+    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(ObjectDeserialize::Struct {
+            base: format!("{v}"),
+            properties: Default::default(),
+        })
+    }
+
+    fn visit_u8<E>(self, v: u8) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(ObjectDeserialize::Struct {
+            base: format!("{v}"),
+            properties: Default::default(),
+        })
+    }
+
+    fn visit_u16<E>(self, v: u16) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(ObjectDeserialize::Struct {
+            base: format!("{v}"),
+            properties: Default::default(),
+        })
+    }
+
+    fn visit_u32<E>(self, v: u32) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(ObjectDeserialize::Struct {
+            base: format!("{v}"),
+            properties: Default::default(),
+        })
+    }
+
+    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(ObjectDeserialize::Struct {
+            base: format!("{v}"),
+            properties: Default::default(),
+        })
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        let mut properties = HashMap::default();
+
+        while let Some((key, value)) = map.next_entry()? {
+            let value: ObjectDeserialize = value;
+            properties.insert(key, value);
+        }
+
+        let base = properties
+            .remove("base")
+            .ok_or(serde::de::Error::custom("Missing `base` property"))?;
+
+        let base = match base {
+            ObjectDeserialize::Struct { base, properties } if properties.is_empty() => base,
+            _ => return Err(serde::de::Error::custom("`base` is not a string")),
+        };
+
+        Ok(ObjectDeserialize::Struct { base, properties })
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let mut values = vec![];
+
+        while let Ok(Some(value)) = seq.next_element() {
+            values.push(value)
+        }
+
+        Ok(ObjectDeserialize::List(values))
+    }
+}
+
+impl ObjectDeserialize {
+    pub fn to_object(self, names: &mut VarNames) -> Object {
+        match self {
+            ObjectDeserialize::Struct { base, properties } => Object::Struct(Struct {
+                base,
+                properties: properties
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let name_id = names.replace(&key);
+                        (name_id, value.to_object(names))
+                    })
+                    .collect(),
+            }),
+            ObjectDeserialize::List(objects) => Object::List(
+                objects
+                    .into_iter()
+                    .map(|value| value.to_object(names))
+                    .collect(),
+            ),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct VariableRef {
     pub scope: usize,
@@ -452,6 +640,7 @@ pub enum VariableAccessError {
     NotARef,
     NotAList,
     InvalidIdx,
+    MissingFile(String),
     MissingVariable(VarNameId),
     MissingField(VarNameId),
 }
@@ -678,6 +867,8 @@ pub trait Executable<Command> {
 
     fn finish(&mut self, state: &mut ProgramState, shutdown: &Shutdown);
 
+    fn var_names_mut(&mut self) -> &mut VarNames;
+
     fn execute(
         &mut self,
         command: &Command,
@@ -719,6 +910,10 @@ pub enum Instruction<T> {
         scope: Option<usize>,
         value: ObjectExpr,
     },
+    LoadVar {
+        target: VarNameId,
+        path: StringExpr,
+    },
     StartIter {
         /// Id of the variable to iterate over
         target: IterTargetExpr,
@@ -752,7 +947,7 @@ impl<T: Debug> std::fmt::Display for Program<T> {
     }
 }
 
-impl<Command> Program<Command> {
+impl<Command: Debug> Program<Command> {
     pub fn run(
         &self,
         executable: &mut impl Executable<Command>,
@@ -830,6 +1025,16 @@ impl<Command> Program<Command> {
                             }
                         }
                     }
+                }
+                Instruction::LoadVar { target, path } => {
+                    let path = path.evaluate(state).map_err(|e| (counter, e))?;
+                    let file = std::fs::File::open(&path)
+                        .map_err(|_| (counter, VariableAccessError::MissingFile(path)))?;
+                    let reader = std::io::BufReader::new(file);
+                    let value: ObjectDeserialize = ron::de::from_reader(reader).unwrap();
+                    let object = value.to_object(executable.var_names_mut());
+
+                    state.insert_var(*target, object, None);
                 }
                 Instruction::StartIter {
                     target: IterTargetExpr::Variable(target),
