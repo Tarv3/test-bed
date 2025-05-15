@@ -401,6 +401,26 @@ impl<'de> Visitor<'de> for ObjectVisitor {
         })
     }
 
+    fn visit_f32<E>(self, v: f32) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(ObjectDeserialize::Struct {
+            base: format!("{v}"),
+            properties: Default::default(),
+        })
+    }
+
+    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(ObjectDeserialize::Struct {
+            base: format!("{v}"),
+            properties: Default::default(),
+        })
+    }
+
     fn visit_i8<E>(self, v: i8) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
@@ -640,7 +660,8 @@ pub enum VariableAccessError {
     NotARef,
     NotAList,
     InvalidIdx,
-    MissingFile(String),
+    FileParseError { file: String, error: String },
+    FileLoadError { file: String, error: String },
     MissingVariable(VarNameId),
     MissingField(VarNameId),
 }
@@ -1028,10 +1049,25 @@ impl<Command: Debug> Program<Command> {
                 }
                 Instruction::LoadVar { target, path } => {
                     let path = path.evaluate(state).map_err(|e| (counter, e))?;
-                    let file = std::fs::File::open(&path)
-                        .map_err(|_| (counter, VariableAccessError::MissingFile(path)))?;
+                    let file = std::fs::File::open(&path).map_err(|e| {
+                        (
+                            counter,
+                            VariableAccessError::FileLoadError {
+                                file: path.clone(),
+                                error: format!("{e}"),
+                            },
+                        )
+                    })?;
                     let reader = std::io::BufReader::new(file);
-                    let value: ObjectDeserialize = ron::de::from_reader(reader).unwrap();
+                    let value: ObjectDeserialize = ron::de::from_reader(reader).map_err(|e| {
+                        (
+                            counter,
+                            VariableAccessError::FileParseError {
+                                file: path,
+                                error: format!("{e}"),
+                            },
+                        )
+                    })?;
                     let object = value.to_object(executable.var_names_mut());
 
                     state.insert_var(*target, object, None);
