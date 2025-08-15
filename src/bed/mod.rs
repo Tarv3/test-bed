@@ -7,7 +7,7 @@ use std::{
 use indicatif::{MultiProgress, ProgressDrawTarget};
 
 use crate::program::{
-    Executable, Object, ObjectDeserialize, ProgramState, VarNameId, VarNames, VariableAccessError,
+    Executable, Object, ProgramState, VarNameId, VarNames, VariableAccessError,
 };
 
 use self::{

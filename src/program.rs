@@ -666,9 +666,49 @@ pub enum VariableAccessError {
     MissingField(VarNameId),
 }
 
+impl VariableAccessError {
+    pub fn display<'a>(&'a self, names: &'a VarNames) -> DisplayVariableAccessError<'a> {
+        DisplayVariableAccessError { names, error: self }
+    }
+}
+
 impl std::fmt::Display for VariableAccessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+pub struct DisplayVariableAccessError<'a> {
+    names: &'a VarNames,
+    error: &'a VariableAccessError,
+}
+
+impl<'a> std::fmt::Display for DisplayVariableAccessError<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.error {
+            VariableAccessError::NotAStruct(object) => write!(f, "Not a struct: {object:?}"),
+            VariableAccessError::NotARef => write!(f, "Not a ref"),
+            VariableAccessError::NotAList => write!(f, "Not a list"),
+            VariableAccessError::InvalidIdx => write!(f, "Invalid idx"),
+            VariableAccessError::FileParseError { file, error } => {
+                write!(f, "Failed to parse `{file}`: {error}")
+            }
+            VariableAccessError::FileLoadError { file, error } => {
+                write!(f, "Failed to load `{file}`: {error}")
+            }
+            VariableAccessError::MissingVariable(var_name_id) => write!(
+                f,
+                "Missing variable `{}`",
+                self.names.evaluate(*var_name_id).unwrap()
+            ),
+            VariableAccessError::MissingField(var_name_id) => {
+                write!(
+                    f,
+                    "Missing field `{}`",
+                    self.names.evaluate(*var_name_id).unwrap()
+                )
+            }
+        }
     }
 }
 

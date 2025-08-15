@@ -123,7 +123,9 @@ fn main() {
             state.set_var(*id, *property, value.clone()).unwrap();
         }
 
-        globals_program.run(&mut test_bed, &mut state, &shutdown).unwrap();
+        globals_program
+            .run(&mut test_bed, &mut state, &shutdown)
+            .unwrap();
         for (name, program) in template_programs {
             test_bed
                 .multibar
@@ -155,7 +157,12 @@ fn main() {
             }
 
             state.new_scope();
-            program.run(&mut test_bed, &mut state, &shutdown).unwrap();
+            if let Err((line, error)) = program.run(&mut test_bed, &mut state, &shutdown) {
+                test_bed.multibar.println(format!(
+                    "Error on line {line}: {}",
+                    error.display(&test_bed.var_names)
+                )).unwrap();
+            }
             state.pop_scope();
             test_bed.reset(&shutdown);
         }
