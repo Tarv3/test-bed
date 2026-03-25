@@ -136,7 +136,15 @@ fn main() {
                 println!("{program}");
             }
             state.new_scope();
-            program.run(&mut test_bed, &mut state, &shutdown).unwrap();
+            if let Err((line, error)) = program.run(&mut test_bed, &mut state, &shutdown) {
+                test_bed
+                    .multibar
+                    .println(format!(
+                        "Error on line {line}: {}",
+                        error.display(&test_bed.var_names)
+                    ))
+                    .unwrap();
+            }
             state.pop_scope();
         }
 
@@ -158,10 +166,13 @@ fn main() {
 
             state.new_scope();
             if let Err((line, error)) = program.run(&mut test_bed, &mut state, &shutdown) {
-                test_bed.multibar.println(format!(
-                    "Error on line {line}: {}",
-                    error.display(&test_bed.var_names)
-                )).unwrap();
+                test_bed
+                    .multibar
+                    .println(format!(
+                        "Error on line {line}: {}",
+                        error.display(&test_bed.var_names)
+                    ))
+                    .unwrap();
             }
             state.pop_scope();
             test_bed.reset(&shutdown);
